@@ -12,6 +12,7 @@ from google_calendar_service import GoogleCalendarService
 from mongodb_config import mongodb_config
 from models import ItemModel, ItemCreate, ItemUpdate, AttendanceRequest, AttendanceResponse, EventAttendanceModel
 from database_services import item_service, calendar_event_service, calendar_service, event_attendance_service
+from event_formatter import format_event_description_with_attendance, extract_original_description, is_all_day_event
 
 # Cargar variables de entorno
 load_dotenv()
@@ -245,6 +246,34 @@ async def debug_env():
         "mongodb_connected": mongodb_config.database is not None
     }
 
+@app.get("/debug/google-calendar-permissions")
+async def debug_google_calendar_permissions():
+    """Endpoint de debug para verificar permisos de Google Calendar"""
+    if not google_calendar_service:
+        return {"error": "Google Calendar Service no inicializado"}
+    
+    try:
+        # Intentar obtener un evento para verificar permisos de lectura
+        events = google_calendar_service.get_events(max_results=1)
+        read_permission = len(events) > 0
+        
+        # Intentar obtener información del servicio para verificar permisos de escritura
+        service_info = {
+            "service_available": google_calendar_service.service is not None,
+            "scopes": google_calendar_service.scopes,
+            "read_permission": read_permission,
+            "write_permission": "calendar" in str(google_calendar_service.scopes)
+        }
+        
+        return service_info
+        
+    except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "scopes": google_calendar_service.scopes if google_calendar_service else None
+        }
+
 @app.get("/debug/mongodb")
 async def debug_mongodb():
     """Endpoint de debug específico para MongoDB"""
@@ -423,6 +452,65 @@ async def get_eventos_por_calendario(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener eventos: {str(e)}")
 
+# Funciones auxiliares para actualización de Google Calendar
+
+async def update_google_calendar_event_description(event_id: str, attendees: List[str], calendar_id: str = "primary"):
+    """
+    Actualizar la descripción de un evento en Google Calendar con información de asistencia
+    
+    Args:
+        event_id: ID del evento a actualizar
+        attendees: Lista de asistentes
+        calendar_id: ID del calendario (por defecto 'primary')
+    """
+    try:
+        print(f"🔄 Iniciando actualización de evento {event_id} en Google Calendar")
+        print(f"📋 Asistentes a procesar: {attendees}")
+        
+        # 1. Obtener el evento actual de Google Calendar
+        print(f"📥 Obteniendo evento actual de Google Calendar...")
+        current_event = google_calendar_service.get_event(calendar_id, event_id)
+        print(f"📄 Evento obtenido: {current_event.get('summary', 'Sin título')}")
+        
+        # 2. Extraer descripción original
+        original_description = extract_original_description(current_event.get('description', ''))
+        print(f"📝 Descripción original: '{original_description[:100]}...' (truncada)")
+        
+        # 3. Formatear nueva descripción con asistencia
+        print(f"🎨 Formateando nueva descripción...")
+        new_description = format_event_description_with_attendance(
+            attendees=attendees,
+            original_description=original_description,
+            event_start=current_event.get('start', {})
+        )
+        print(f"📝 Nueva descripción: '{new_description[:200]}...' (truncada)")
+        
+        # 4. Preparar datos para actualización
+        event_data = {
+            'summary': current_event.get('summary', ''),
+            'description': new_description,
+            'start': current_event.get('start', {}),
+            'end': current_event.get('end', {}),
+            'location': current_event.get('location', ''),
+            'status': current_event.get('status', 'confirmed')
+        }
+        print(f"📦 Datos preparados para actualización")
+        
+        # 5. Actualizar el evento
+        print(f"💾 Enviando actualización a Google Calendar...")
+        updated_event = google_calendar_service.update_event(calendar_id, event_id, event_data)
+        print(f"✅ Evento {event_id} actualizado exitosamente en Google Calendar")
+        print(f"📊 Total de asistentes procesados: {len(attendees)}")
+        
+        return updated_event
+        
+    except Exception as e:
+        print(f"❌ Error al actualizar evento {event_id} en Google Calendar: {e}")
+        print(f"🔍 Tipo de error: {type(e).__name__}")
+        import traceback
+        print(f"📋 Traceback completo: {traceback.format_exc()}")
+        raise
+
 # Rutas de Asistencia a Eventos
 
 @app.post("/asistir", response_model=AttendanceResponse)
@@ -434,10 +522,26 @@ async def asistir_evento(attendance_request: AttendanceRequest):
     - **user_name**: Nombre del usuario que asistirá
     """
     try:
+        # 1. Registrar asistencia en MongoDB
         result = await event_attendance_service.add_attendance(
             attendance_request.event_id, 
             attendance_request.user_name
         )
+        
+        # 2. Actualizar descripción en Google Calendar
+        if google_calendar_service:
+            try:
+                await update_google_calendar_event_description(
+                    attendance_request.event_id, 
+                    result.attendees,
+                    calendar_id="d7dd701e2bb45dee1e2863fddb2b15354bd4f073a1350338cb66b9ee7789f9bb@group.calendar.google.com"
+                )
+            except Exception as calendar_error:
+                # Log del error pero no fallar la operación
+                print(f"⚠️ Error al actualizar Google Calendar: {calendar_error}")
+                # Agregar advertencia al mensaje de respuesta
+                result.message += f" (Advertencia: No se pudo actualizar Google Calendar: {str(calendar_error)})"
+        
         return result
     except ValueError as e:
         # Usuario ya existe
@@ -497,9 +601,26 @@ async def cancelar_asistencia(event_id: str, user_name: str):
     - **user_name**: Nombre del usuario
     """
     try:
+        # 1. Remover asistencia de MongoDB
         removed = await event_attendance_service.remove_attendance(event_id, user_name)
         if not removed:
             raise HTTPException(status_code=404, detail="Usuario no encontrado en la lista de asistentes")
+        
+        # 2. Obtener lista actualizada de asistentes
+        attendance = await event_attendance_service.get_attendance(event_id)
+        updated_attendees = attendance.attendees if attendance else []
+        
+        # 3. Actualizar descripción en Google Calendar
+        if google_calendar_service:
+            try:
+                await update_google_calendar_event_description(
+                    event_id, 
+                    updated_attendees,
+                    calendar_id="d7dd701e2bb45dee1e2863fddb2b15354bd4f073a1350338cb66b9ee7789f9bb@group.calendar.google.com"
+                )
+            except Exception as calendar_error:
+                # Log del error pero no fallar la operación
+                print(f"⚠️ Error al actualizar Google Calendar: {calendar_error}")
         
         return MessageResponse(
             message=f"Asistencia de '{user_name}' cancelada exitosamente",

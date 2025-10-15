@@ -177,3 +177,65 @@ class GoogleCalendarService:
         except Exception as e:
             logger.error(f"Error inesperado: {e}")
             raise
+    
+    def update_event(self, calendar_id: str, event_id: str, event_data: Dict) -> Dict:
+        """
+        Actualizar un evento existente en Google Calendar
+        
+        Args:
+            calendar_id: ID del calendario
+            event_id: ID del evento a actualizar
+            event_data: Datos del evento a actualizar
+        
+        Returns:
+            Evento actualizado
+        """
+        try:
+            if not self.service:
+                raise Exception("Servicio de Google Calendar no inicializado")
+            
+            # Actualizar el evento
+            updated_event = self.service.events().update(
+                calendarId=calendar_id,
+                eventId=event_id,
+                body=event_data
+            ).execute()
+            
+            logger.info(f"Evento {event_id} actualizado exitosamente en calendario {calendar_id}")
+            return updated_event
+            
+        except HttpError as error:
+            logger.error(f"Error de Google Calendar API al actualizar evento: {error}")
+            raise Exception(f"Error al actualizar evento: {error}")
+        except Exception as e:
+            logger.error(f"Error inesperado al actualizar evento: {e}")
+            raise
+    
+    def get_event(self, calendar_id: str, event_id: str) -> Dict:
+        """
+        Obtener un evento específico por ID
+        
+        Args:
+            calendar_id: ID del calendario
+            event_id: ID del evento
+        
+        Returns:
+            Datos del evento
+        """
+        try:
+            if not self.service:
+                raise Exception("Servicio de Google Calendar no inicializado")
+            
+            event = self.service.events().get(
+                calendarId=calendar_id,
+                eventId=event_id
+            ).execute()
+            
+            return event
+            
+        except HttpError as error:
+            logger.error(f"Error de Google Calendar API al obtener evento: {error}")
+            raise Exception(f"Error al obtener evento: {error}")
+        except Exception as e:
+            logger.error(f"Error inesperado al obtener evento: {e}")
+            raise
