@@ -46,6 +46,16 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 - `PUT /items/{item_id}` - Actualizar un item
 - `DELETE /items/{item_id}` - Eliminar un item
 
+### Google Calendar API
+- `GET /calendarios` - Obtener lista de calendarios disponibles
+- `GET /eventos` - Obtener eventos del calendario principal
+- `GET /eventos/{calendar_id}` - Obtener eventos de un calendario específico
+
+**Parámetros para endpoints de eventos:**
+- `calendar_id` - ID del calendario (por defecto 'primary')
+- `max_results` - Número máximo de eventos (1-100, por defecto 10)
+- `days_ahead` - Días hacia adelante para buscar (1-365, por defecto 30)
+
 ## Deploy en Vercel
 
 ### 1. Instalar Vercel CLI
@@ -96,9 +106,47 @@ curl -X POST "http://localhost:8000/items" \
 curl http://localhost:8000/items/1
 ```
 
+### Google Calendar API
+
+#### Obtener calendarios disponibles
+```bash
+curl http://localhost:8000/calendarios
+```
+
+#### Obtener eventos del calendario principal
+```bash
+curl http://localhost:8000/eventos
+```
+
+#### Obtener eventos con parámetros
+```bash
+curl "http://localhost:8000/eventos?max_results=5&days_ahead=7"
+```
+
+#### Obtener eventos de calendario específico
+```bash
+curl http://localhost:8000/eventos/tu-calendar-id@group.calendar.google.com
+```
+
+## Configuración de Google Calendar
+
+Para usar los endpoints de Google Calendar, sigue la guía completa en [GOOGLE_CALENDAR_SETUP.md](GOOGLE_CALENDAR_SETUP.md)
+
+**Resumen rápido:**
+1. Crear proyecto en Google Cloud Console
+2. Habilitar Google Calendar API
+3. Crear credenciales OAuth 2.0
+4. Descargar `credentials.json`
+5. Configurar variables de entorno
+
 ## Variables de entorno (opcional)
 Puedes crear un archivo `.env` para variables de entorno:
 ```
 DATABASE_URL=your_database_url
 API_KEY=your_api_key
 ```
+
+## 🔒 Seguridad
+- Los archivos sensibles (`.env`, `credentials.json`, `token.json`) están protegidos por `.gitignore`
+- Nunca subas credenciales reales al repositorio
+- Para producción, usa variables de entorno de Vercel

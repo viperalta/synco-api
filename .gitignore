@@ -42,3 +42,7 @@ venv.bak/
 # OS
 .DS_Store
 Thumbs.db
+
+# Google Calendar API
+credentials.json
+token.json

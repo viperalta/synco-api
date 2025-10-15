@@ -1,8 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Optional
+from datetime import datetime, timedelta
 import uvicorn
+import os
+from dotenv import load_dotenv
+from google_calendar_service import GoogleCalendarService
+
+# Cargar variables de entorno
+load_dotenv()
 
 # Crear instancia de FastAPI
 app = FastAPI(
@@ -41,11 +48,42 @@ class MessageResponse(BaseModel):
     message: str
     status: str
 
+class EventResponse(BaseModel):
+    id: str
+    summary: str
+    description: str
+    start: Dict
+    end: Dict
+    location: str
+    status: str
+    htmlLink: str
+    created: str
+    updated: str
+
+class CalendarResponse(BaseModel):
+    id: str
+    summary: str
+    description: str
+    primary: bool
+    accessRole: str
+    backgroundColor: str
+    foregroundColor: str
+
 # Base de datos en memoria (para ejemplo)
 items_db: List[Item] = [
     Item(id=1, name="Producto 1", description="Descripción del producto 1", price=29.99),
     Item(id=2, name="Producto 2", description="Descripción del producto 2", price=49.99),
 ]
+
+# Inicializar servicio de Google Calendar
+google_calendar_service = None
+try:
+    credentials_file = os.getenv('GOOGLE_CREDENTIALS_FILE', 'credentials.json')
+    token_file = os.getenv('GOOGLE_TOKEN_FILE', 'token.json')
+    google_calendar_service = GoogleCalendarService(credentials_file, token_file)
+except Exception as e:
+    print(f"Advertencia: No se pudo inicializar Google Calendar Service: {e}")
+    print("Asegúrate de tener el archivo credentials.json configurado")
 
 # Rutas de la API
 
@@ -108,6 +146,95 @@ async def delete_item(item_id: int):
                 status="success"
             )
     raise HTTPException(status_code=404, detail="Item no encontrado")
+
+# Rutas de Google Calendar
+
+@app.get("/calendarios", response_model=List[CalendarResponse])
+async def get_calendarios():
+    """Obtener lista de calendarios disponibles"""
+    if not google_calendar_service:
+        raise HTTPException(
+            status_code=503, 
+            detail="Servicio de Google Calendar no disponible. Verifica la configuración."
+        )
+    
+    try:
+        calendarios = google_calendar_service.list_calendars()
+        return calendarios
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener calendarios: {str(e)}")
+
+@app.get("/eventos", response_model=List[EventResponse])
+async def get_eventos(
+    calendar_id: str = Query(default="primary", description="ID del calendario"),
+    max_results: int = Query(default=10, ge=1, le=100, description="Número máximo de eventos"),
+    days_ahead: int = Query(default=30, ge=1, le=365, description="Días hacia adelante para buscar eventos")
+):
+    """
+    Obtener eventos de un calendario específico
+    
+    - **calendar_id**: ID del calendario (por defecto 'primary')
+    - **max_results**: Número máximo de eventos a retornar (1-100)
+    - **days_ahead**: Días hacia adelante para buscar eventos (1-365)
+    """
+    if not google_calendar_service:
+        raise HTTPException(
+            status_code=503, 
+            detail="Servicio de Google Calendar no disponible. Verifica la configuración."
+        )
+    
+    try:
+        # Calcular fechas de búsqueda
+        time_min = datetime.utcnow()
+        time_max = time_min + timedelta(days=days_ahead)
+        
+        eventos = google_calendar_service.get_events(
+            calendar_id=calendar_id,
+            max_results=max_results,
+            time_min=time_min,
+            time_max=time_max
+        )
+        
+        return eventos
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener eventos: {str(e)}")
+
+@app.get("/eventos/{calendar_id}", response_model=List[EventResponse])
+async def get_eventos_por_calendario(
+    calendar_id: str,
+    max_results: int = Query(default=10, ge=1, le=100, description="Número máximo de eventos"),
+    days_ahead: int = Query(default=30, ge=1, le=365, description="Días hacia adelante para buscar eventos")
+):
+    """
+    Obtener eventos de un calendario específico por ID
+    
+    - **calendar_id**: ID del calendario en la URL
+    - **max_results**: Número máximo de eventos a retornar (1-100)
+    - **days_ahead**: Días hacia adelante para buscar eventos (1-365)
+    """
+    if not google_calendar_service:
+        raise HTTPException(
+            status_code=503, 
+            detail="Servicio de Google Calendar no disponible. Verifica la configuración."
+        )
+    
+    try:
+        # Calcular fechas de búsqueda
+        time_min = datetime.utcnow()
+        time_max = time_min + timedelta(days=days_ahead)
+        
+        eventos = google_calendar_service.get_events(
+            calendar_id=calendar_id,
+            max_results=max_results,
+            time_min=time_min,
+            time_max=time_max
+        )
+        
+        return eventos
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener eventos: {str(e)}")
 
 # Función para ejecutar localmente
 if __name__ == "__main__":
