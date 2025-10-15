@@ -17,11 +17,27 @@ logger = logging.getLogger(__name__)
 class ItemService:
     def __init__(self):
         self._collection = None
+        self._collection_name = "items"
     
     @property
     def collection(self):
         if self._collection is None:
-            self._collection = mongodb_config.get_collection("items")
+            # Verificar conexión antes de obtener la colección
+            if mongodb_config.database is None:
+                # En Vercel, la conexión puede haberse perdido entre requests
+                # Intentar reconectar de manera síncrona
+                import asyncio
+                try:
+                    # Crear un nuevo event loop si es necesario
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(mongodb_config.connect())
+                    loop.close()
+                except Exception as e:
+                    logger.error(f"Error al reconectar MongoDB: {e}")
+                    raise ValueError("No se pudo establecer conexión con MongoDB")
+            
+            self._collection = mongodb_config.get_collection(self._collection_name)
         return self._collection
     
     async def create_item(self, item: ItemCreate) -> ItemModel:
@@ -79,11 +95,27 @@ class ItemService:
 class CalendarEventService:
     def __init__(self):
         self._collection = None
+        self._collection_name = "calendar_events"
     
     @property
     def collection(self):
         if self._collection is None:
-            self._collection = mongodb_config.get_collection("calendar_events")
+            # Verificar conexión antes de obtener la colección
+            if mongodb_config.database is None:
+                # En Vercel, la conexión puede haberse perdido entre requests
+                # Intentar reconectar de manera síncrona
+                import asyncio
+                try:
+                    # Crear un nuevo event loop si es necesario
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(mongodb_config.connect())
+                    loop.close()
+                except Exception as e:
+                    logger.error(f"Error al reconectar MongoDB: {e}")
+                    raise ValueError("No se pudo establecer conexión con MongoDB")
+            
+            self._collection = mongodb_config.get_collection(self._collection_name)
         return self._collection
     
     async def create_event(self, event_data: dict) -> CalendarEventModel:
@@ -141,11 +173,27 @@ class CalendarEventService:
 class CalendarService:
     def __init__(self):
         self._collection = None
+        self._collection_name = "calendars"
     
     @property
     def collection(self):
         if self._collection is None:
-            self._collection = mongodb_config.get_collection("calendars")
+            # Verificar conexión antes de obtener la colección
+            if mongodb_config.database is None:
+                # En Vercel, la conexión puede haberse perdido entre requests
+                # Intentar reconectar de manera síncrona
+                import asyncio
+                try:
+                    # Crear un nuevo event loop si es necesario
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(mongodb_config.connect())
+                    loop.close()
+                except Exception as e:
+                    logger.error(f"Error al reconectar MongoDB: {e}")
+                    raise ValueError("No se pudo establecer conexión con MongoDB")
+            
+            self._collection = mongodb_config.get_collection(self._collection_name)
         return self._collection
     
     async def create_calendar(self, calendar_data: dict) -> CalendarModel:
@@ -174,11 +222,27 @@ class CalendarService:
 class EventAttendanceService:
     def __init__(self):
         self._collection = None
+        self._collection_name = "event_attendances"
     
     @property
     def collection(self):
         if self._collection is None:
-            self._collection = mongodb_config.get_collection("event_attendances")
+            # Verificar conexión antes de obtener la colección
+            if mongodb_config.database is None:
+                # En Vercel, la conexión puede haberse perdido entre requests
+                # Intentar reconectar de manera síncrona
+                import asyncio
+                try:
+                    # Crear un nuevo event loop si es necesario
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(mongodb_config.connect())
+                    loop.close()
+                except Exception as e:
+                    logger.error(f"Error al reconectar MongoDB: {e}")
+                    raise ValueError("No se pudo establecer conexión con MongoDB")
+            
+            self._collection = mongodb_config.get_collection(self._collection_name)
         return self._collection
     
     async def add_attendance(self, event_id: str, user_name: str) -> AttendanceResponse:
@@ -286,26 +350,13 @@ class LazyService:
     def __init__(self, service_getter):
         self._service_getter = service_getter
         self._service = None
-        self._lock = None
+        self._initialized = False
     
     def __getattr__(self, name):
-        if self._service is None:
-            # Importar asyncio solo cuando sea necesario
-            import asyncio
-            if self._lock is None:
-                self._lock = asyncio.Lock()
-            
-            # Verificar que el event loop esté activo
-            try:
-                loop = asyncio.get_running_loop()
-                if loop.is_closed():
-                    raise RuntimeError("Event loop is closed")
-            except RuntimeError:
-                # No hay event loop activo, crear el servicio directamente
-                self._service = self._service_getter()
-            else:
-                # Event loop activo, crear el servicio
-                self._service = self._service_getter()
+        if not self._initialized:
+            # Crear el servicio de manera síncrona para evitar problemas con event loops
+            self._service = self._service_getter()
+            self._initialized = True
         
         return getattr(self._service, name)
 
