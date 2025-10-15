@@ -22,21 +22,7 @@ class ItemService:
     @property
     def collection(self):
         if self._collection is None:
-            # Verificar conexión antes de obtener la colección
-            if mongodb_config.database is None:
-                # En Vercel, la conexión puede haberse perdido entre requests
-                # Intentar reconectar de manera síncrona
-                import asyncio
-                try:
-                    # Crear un nuevo event loop si es necesario
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(mongodb_config.connect())
-                    loop.close()
-                except Exception as e:
-                    logger.error(f"Error al reconectar MongoDB: {e}")
-                    raise ValueError("No se pudo establecer conexión con MongoDB")
-            
+            # El middleware se encarga de la reconexión
             self._collection = mongodb_config.get_collection(self._collection_name)
         return self._collection
     
@@ -100,21 +86,7 @@ class CalendarEventService:
     @property
     def collection(self):
         if self._collection is None:
-            # Verificar conexión antes de obtener la colección
-            if mongodb_config.database is None:
-                # En Vercel, la conexión puede haberse perdido entre requests
-                # Intentar reconectar de manera síncrona
-                import asyncio
-                try:
-                    # Crear un nuevo event loop si es necesario
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(mongodb_config.connect())
-                    loop.close()
-                except Exception as e:
-                    logger.error(f"Error al reconectar MongoDB: {e}")
-                    raise ValueError("No se pudo establecer conexión con MongoDB")
-            
+            # El middleware se encarga de la reconexión
             self._collection = mongodb_config.get_collection(self._collection_name)
         return self._collection
     
@@ -178,21 +150,7 @@ class CalendarService:
     @property
     def collection(self):
         if self._collection is None:
-            # Verificar conexión antes de obtener la colección
-            if mongodb_config.database is None:
-                # En Vercel, la conexión puede haberse perdido entre requests
-                # Intentar reconectar de manera síncrona
-                import asyncio
-                try:
-                    # Crear un nuevo event loop si es necesario
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(mongodb_config.connect())
-                    loop.close()
-                except Exception as e:
-                    logger.error(f"Error al reconectar MongoDB: {e}")
-                    raise ValueError("No se pudo establecer conexión con MongoDB")
-            
+            # El middleware se encarga de la reconexión
             self._collection = mongodb_config.get_collection(self._collection_name)
         return self._collection
     
@@ -227,21 +185,7 @@ class EventAttendanceService:
     @property
     def collection(self):
         if self._collection is None:
-            # Verificar conexión antes de obtener la colección
-            if mongodb_config.database is None:
-                # En Vercel, la conexión puede haberse perdido entre requests
-                # Intentar reconectar de manera síncrona
-                import asyncio
-                try:
-                    # Crear un nuevo event loop si es necesario
-                    loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    loop.run_until_complete(mongodb_config.connect())
-                    loop.close()
-                except Exception as e:
-                    logger.error(f"Error al reconectar MongoDB: {e}")
-                    raise ValueError("No se pudo establecer conexión con MongoDB")
-            
+            # El middleware se encarga de la reconexión
             self._collection = mongodb_config.get_collection(self._collection_name)
         return self._collection
     
