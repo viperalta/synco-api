@@ -114,8 +114,39 @@ curl "http://localhost:8000/eventos?max_results=5&days_ahead=7"
 
 1. En Vercel Dashboard, ve a tu proyecto
 2. Ve a **Settings** > **Environment Variables**
-3. Agrega las variables de entorno necesarias
-4. Para `credentials.json`, necesitarás convertirlo a una variable de entorno o usar un servicio de almacenamiento
+3. Agrega las variables de entorno necesarias:
+
+   - `GOOGLE_CREDENTIALS_JSON` → Contenido de `credentials.json` (JSON completo)
+   - `GOOGLE_TOKEN_JSON` → Contenido JSON del token (ver paso de conversión)
+   - `GOOGLE_SCOPES` → `https://www.googleapis.com/auth/calendar.readonly`
+   - `DEFAULT_CALENDAR_ID` → `primary` (opcional)
+
+   Alternativa si prefieres el token como binario:
+   - `GOOGLE_TOKEN_BASE64` → `token.json` binario codificado en base64
+
+4. La app escribe estos valores a `/tmp/credentials.json` y `/tmp/token.json` automáticamente al iniciar.
+5. No subas `credentials.json` ni `token.json` al repositorio.
+
+### Conversión del token a JSON (recomendada)
+
+Ejecuta en local para convertir el pickle binario a JSON compatible:
+
+```bash
+python convert_token_pickle_to_json.py > token-google.json
+```
+
+Luego copia el contenido de `token-google.json` a `GOOGLE_TOKEN_JSON`.
+
+Alternativa base64 para el binario:
+
+```bash
+python - << 'PY'
+import base64
+print(base64.b64encode(open('token.json','rb').read()).decode())
+PY
+```
+
+Copia el resultado a `GOOGLE_TOKEN_BASE64`.
 
 ## ❗ Solución de problemas
 

@@ -3,6 +3,7 @@ Servicio para interactuar con Google Calendar API
 """
 import os
 import pickle
+import json
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional
 from google.auth.transport.requests import Request
@@ -28,10 +29,21 @@ class GoogleCalendarService:
         """Autenticar con Google Calendar API"""
         creds = None
         
-        # Cargar credenciales existentes
+        # Cargar credenciales existentes (admite pickle o JSON)
         if os.path.exists(self.token_file):
-            with open(self.token_file, 'rb') as token:
-                creds = pickle.load(token)
+            # Intentar cargar como pickle primero
+            try:
+                with open(self.token_file, 'rb') as token:
+                    creds = pickle.load(token)
+            except Exception:
+                # Si no es pickle, intentar como JSON autorizado de usuario
+                try:
+                    from google.oauth2.credentials import Credentials
+                    creds = Credentials.from_authorized_user_file(self.token_file, self.scopes)
+                except Exception as e:
+                    raise Exception(
+                        f"No se pudo cargar el token desde '{self.token_file}' como pickle ni JSON: {e}"
+                    )
         
         # Si no hay credenciales válidas, hacer el flujo de OAuth
         if not creds or not creds.valid:
@@ -49,9 +61,13 @@ class GoogleCalendarService:
                 )
                 creds = flow.run_local_server(port=8080)
             
-            # Guardar credenciales para la próxima vez
-            with open(self.token_file, 'wb') as token:
-                pickle.dump(creds, token)
+            # Guardar credenciales para la próxima vez (en entorno efímero está bien)
+            try:
+                with open(self.token_file, 'wb') as token:
+                    pickle.dump(creds, token)
+            except Exception:
+                # En entornos sin permiso de escritura, continuar sin bloquear
+                logger.warning("No se pudieron persistir las credenciales en token_file; se continuará en memoria.")
         
         try:
             self.service = build('calendar', 'v3', credentials=creds)
@@ -60,7 +76,40 @@ class GoogleCalendarService:
             logger.error(f"Error al autenticar con Google Calendar: {e}")
             raise
     
-    def get_events(self, calendar_id: str = 'primary', max_results: int = 10, 
+    
+    
+    def list_calendars(self) -> List[Dict]:
+        """Obtener lista de calendarios disponibles"""
+        try:
+            if not self.service:
+                raise Exception("Servicio de Google Calendar no inicializado")
+            
+            calendar_list = self.service.calendarList().list().execute()
+            calendars = calendar_list.get('items', [])
+            
+            formatted_calendars = []
+            for calendar in calendars:
+                formatted_calendar = {
+                    'id': calendar.get('id'),
+                    'summary': calendar.get('summary'),
+                    'description': calendar.get('description', ''),
+                    'primary': calendar.get('primary', False),
+                    'accessRole': calendar.get('accessRole', ''),
+                    'backgroundColor': calendar.get('backgroundColor', ''),
+                    'foregroundColor': calendar.get('foregroundColor', '')
+                }
+                formatted_calendars.append(formatted_calendar)
+            
+            return formatted_calendars
+            
+        except HttpError as error:
+            logger.error(f"Error al obtener calendarios: {error}")
+            raise Exception(f"Error al obtener calendarios: {error}")
+        except Exception as e:
+            logger.error(f"Error inesperado: {e}")
+            raise
+    
+    def get_events(self, calendar_id: str = 'primary', max_results: int = 30, 
                    time_min: Optional[datetime] = None, time_max: Optional[datetime] = None) -> List[Dict]:
         """
         Obtener eventos de un calendario específico
@@ -123,37 +172,6 @@ class GoogleCalendarService:
         except HttpError as error:
             logger.error(f"Error de Google Calendar API: {error}")
             raise Exception(f"Error al obtener eventos: {error}")
-        except Exception as e:
-            logger.error(f"Error inesperado: {e}")
-            raise
-    
-    def list_calendars(self) -> List[Dict]:
-        """Obtener lista de calendarios disponibles"""
-        try:
-            if not self.service:
-                raise Exception("Servicio de Google Calendar no inicializado")
-            
-            calendar_list = self.service.calendarList().list().execute()
-            calendars = calendar_list.get('items', [])
-            
-            formatted_calendars = []
-            for calendar in calendars:
-                formatted_calendar = {
-                    'id': calendar.get('id'),
-                    'summary': calendar.get('summary'),
-                    'description': calendar.get('description', ''),
-                    'primary': calendar.get('primary', False),
-                    'accessRole': calendar.get('accessRole', ''),
-                    'backgroundColor': calendar.get('backgroundColor', ''),
-                    'foregroundColor': calendar.get('foregroundColor', '')
-                }
-                formatted_calendars.append(formatted_calendar)
-            
-            return formatted_calendars
-            
-        except HttpError as error:
-            logger.error(f"Error al obtener calendarios: {error}")
-            raise Exception(f"Error al obtener calendarios: {error}")
         except Exception as e:
             logger.error(f"Error inesperado: {e}")
             raise

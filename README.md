@@ -78,6 +78,43 @@ vercel
 vercel --prod
 ```
 
+### 5. Variables de entorno necesarias en Vercel
+
+Configura estas variables en Vercel → Project → Settings → Environment Variables (Targets: Production y Preview):
+
+- `GOOGLE_CREDENTIALS_JSON` → Contenido completo de tu `credentials.json` (JSON)
+- `GOOGLE_TOKEN_JSON` → Contenido JSON del token (ver conversión más abajo)
+- `GOOGLE_SCOPES` → `https://www.googleapis.com/auth/calendar.readonly`
+- `DEFAULT_CALENDAR_ID` → `primary` (opcional)
+
+Opcional (solo si prefieres mantener el token como binario pickle):
+- `GOOGLE_TOKEN_BASE64` → El `token.json` binario codificado en base64
+
+Notas importantes:
+- La app escribe estos valores a archivos temporales en `/tmp` al iniciar (serverless), por lo que no necesitas subir archivos al repo.
+- Si defines `GOOGLE_TOKEN_JSON`, se usará ese formato; si no, y defines `GOOGLE_TOKEN_BASE64`, se decodificará a binario.
+
+### 6. Convertir el token de pickle a JSON (recomendado)
+
+Tu token local generado por la primera autenticación se guarda como pickle binario. Convierte ese token a JSON para usarlo fácilmente en Vercel:
+
+```bash
+python convert_token_pickle_to_json.py > token-google.json
+```
+
+El archivo `token-google.json` contendrá un JSON con `refresh_token`, `client_id`, etc. Copia su contenido a la variable `GOOGLE_TOKEN_JSON` en Vercel.
+
+Alternativa (si prefieres mantener el binario):
+
+```bash
+python - << 'PY'
+import base64
+print(base64.b64encode(open('token.json','rb').read()).decode())
+PY
+```
+
+Copia el resultado a `GOOGLE_TOKEN_BASE64` en Vercel.
+
 ## Pruebas con curl
 
 ### Verificar que la API funciona

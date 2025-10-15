@@ -5,11 +5,51 @@ from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 import uvicorn
 import os
+import json
+import base64
 from dotenv import load_dotenv
 from google_calendar_service import GoogleCalendarService
 
 # Cargar variables de entorno
 load_dotenv()
+
+# Escribir credenciales/token desde variables de entorno a /tmp para entornos serverless (Vercel)
+def ensure_google_files_from_env():
+    credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+    token_json = os.getenv("GOOGLE_TOKEN_JSON")
+    token_base64 = os.getenv("GOOGLE_TOKEN_BASE64")
+
+    credentials_path = os.getenv("GOOGLE_CREDENTIALS_FILE", "/tmp/credentials.json")
+    token_path = os.getenv("GOOGLE_TOKEN_FILE", "/tmp/token.json")
+
+    # Helper para asegurar el directorio destino
+    def ensure_parent_dir(path: str):
+        parent = os.path.dirname(path)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+
+    if credentials_json:
+        ensure_parent_dir(credentials_path)
+        with open(credentials_path, "w") as f:
+            f.write(credentials_json)
+        os.environ["GOOGLE_CREDENTIALS_FILE"] = credentials_path
+
+    # Preferencia: JSON explícito; si no hay, aceptamos base64 (pickle/binario)
+    if token_json:
+        ensure_parent_dir(token_path)
+        with open(token_path, "w") as f:
+            f.write(token_json)
+        os.environ["GOOGLE_TOKEN_FILE"] = token_path
+    elif token_base64:
+        ensure_parent_dir(token_path)
+        binary = base64.b64decode(token_base64)
+        # Si viene en base64 y queremos mantener extensión binaria, usamos el path dado
+        with open(token_path, "wb") as f:
+            f.write(binary)
+        os.environ["GOOGLE_TOKEN_FILE"] = token_path
+
+
+ensure_google_files_from_env()
 
 # Crear instancia de FastAPI
 app = FastAPI(
@@ -167,15 +207,15 @@ async def get_calendarios():
 @app.get("/eventos", response_model=List[EventResponse])
 async def get_eventos(
     calendar_id: str = Query(default="primary", description="ID del calendario"),
-    max_results: int = Query(default=10, ge=1, le=100, description="Número máximo de eventos"),
-    days_ahead: int = Query(default=30, ge=1, le=365, description="Días hacia adelante para buscar eventos")
+    max_results: int = Query(default=50, ge=1, le=100, description="Número máximo de eventos"),
+    days_ahead: int = Query(default=90, ge=1, le=365, description="Días hacia adelante para buscar eventos")
 ):
     """
     Obtener eventos de un calendario específico
     
     - **calendar_id**: ID del calendario (por defecto 'primary')
-    - **max_results**: Número máximo de eventos a retornar (1-100)
-    - **days_ahead**: Días hacia adelante para buscar eventos (1-365)
+    - **max_results**: Número máximo de eventos a retornar (1-100, por defecto 50)
+    - **days_ahead**: Días hacia adelante para buscar eventos (1-365, por defecto 90 días = 3 meses)
     """
     if not google_calendar_service:
         raise HTTPException(
@@ -203,8 +243,8 @@ async def get_eventos(
 @app.get("/eventos/{calendar_id}", response_model=List[EventResponse])
 async def get_eventos_por_calendario(
     calendar_id: str,
-    max_results: int = Query(default=10, ge=1, le=100, description="Número máximo de eventos"),
-    days_ahead: int = Query(default=30, ge=1, le=365, description="Días hacia adelante para buscar eventos")
+    max_results: int = Query(default=50, ge=1, le=100, description="Número máximo de eventos"),
+    days_ahead: int = Query(default=90, ge=1, le=365, description="Días hacia adelante para buscar eventos")
 ):
     """
     Obtener eventos de un calendario específico por ID
