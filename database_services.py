@@ -251,8 +251,48 @@ class EventAttendanceService:
         result = await self.collection.delete_one({"event_id": event_id})
         return result.deleted_count > 0
 
-# Instancias globales de servicios
-item_service = ItemService()
-calendar_event_service = CalendarEventService()
-calendar_service = CalendarService()
-event_attendance_service = EventAttendanceService()
+# Instancias globales de servicios (inicialización perezosa)
+_item_service = None
+_calendar_event_service = None
+_calendar_service = None
+_event_attendance_service = None
+
+def get_item_service() -> ItemService:
+    global _item_service
+    if _item_service is None:
+        _item_service = ItemService()
+    return _item_service
+
+def get_calendar_event_service() -> CalendarEventService:
+    global _calendar_event_service
+    if _calendar_event_service is None:
+        _calendar_event_service = CalendarEventService()
+    return _calendar_event_service
+
+def get_calendar_service() -> CalendarService:
+    global _calendar_service
+    if _calendar_service is None:
+        _calendar_service = CalendarService()
+    return _calendar_service
+
+def get_event_attendance_service() -> EventAttendanceService:
+    global _event_attendance_service
+    if _event_attendance_service is None:
+        _event_attendance_service = EventAttendanceService()
+    return _event_attendance_service
+
+# Instancias para compatibilidad (inicialización perezosa)
+class LazyService:
+    def __init__(self, service_getter):
+        self._service_getter = service_getter
+        self._service = None
+    
+    def __getattr__(self, name):
+        if self._service is None:
+            self._service = self._service_getter()
+        return getattr(self._service, name)
+
+item_service = LazyService(get_item_service)
+calendar_event_service = LazyService(get_calendar_event_service)
+calendar_service = LazyService(get_calendar_service)
+event_attendance_service = LazyService(get_event_attendance_service)

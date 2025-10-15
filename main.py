@@ -530,6 +530,66 @@ async def cancelar_asistencia(event_id: str, user_name: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al cancelar asistencia: {str(e)}")
 
+@app.get("/eventos-con-asistencia", response_model=List[dict])
+async def get_eventos_con_asistencia(
+    calendar_id: str = Query(default="primary", description="ID del calendario"),
+    max_results: int = Query(default=50, ge=1, le=100, description="Número máximo de eventos"),
+    days_ahead: int = Query(default=90, ge=1, le=365, description="Días hacia adelante para buscar eventos")
+):
+    """
+    Obtener eventos de Google Calendar que tienen asistencia registrada
+    
+    - **calendar_id**: ID del calendario (por defecto 'primary')
+    - **max_results**: Número máximo de eventos a retornar (1-100, por defecto 50)
+    - **days_ahead**: Días hacia adelante para buscar eventos (1-365, por defecto 90 días)
+    
+    Retorna eventos con información de asistencia incluida
+    """
+    if not google_calendar_service:
+        raise HTTPException(
+            status_code=503, 
+            detail="Servicio de Google Calendar no disponible. Verifica la configuración."
+        )
+    
+    try:
+        # Obtener eventos de Google Calendar
+        time_min = datetime.utcnow()
+        time_max = time_min + timedelta(days=days_ahead)
+        
+        eventos = google_calendar_service.get_events(
+            calendar_id=calendar_id,
+            max_results=max_results,
+            time_min=time_min,
+            time_max=time_max
+        )
+        
+        # Obtener todas las asistencias registradas
+        attendances = await event_attendance_service.get_all_attendances()
+        
+        # Crear un diccionario para búsqueda rápida por event_id
+        attendance_dict = {att.event_id: att for att in attendances}
+        
+        # Filtrar solo eventos que tienen asistencia registrada
+        eventos_con_asistencia = []
+        for evento in eventos:
+            event_id = evento.get("id")
+            if event_id in attendance_dict:
+                attendance = attendance_dict[event_id]
+                # Agregar información de asistencia al evento
+                evento_con_asistencia = evento.copy()
+                evento_con_asistencia["asistencia"] = {
+                    "attendees": attendance.attendees,
+                    "total_attendees": len(attendance.attendees),
+                    "created_at": attendance.created_at.isoformat() if attendance.created_at else None,
+                    "updated_at": attendance.updated_at.isoformat() if attendance.updated_at else None
+                }
+                eventos_con_asistencia.append(evento_con_asistencia)
+        
+        return eventos_con_asistencia
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener eventos con asistencia: {str(e)}")
+
 # Función para ejecutar localmente
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
