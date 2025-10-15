@@ -54,16 +54,22 @@ def ensure_google_files_from_env():
     
     # También permitir que GOOGLE_CREDENTIALS_FILE contenga JSON inline
     raw_credentials_file = os.getenv("GOOGLE_CREDENTIALS_FILE")
-    if raw_credentials_file and raw_credentials_file.strip().startswith("{"):
-        try:
-            json.loads(raw_credentials_file)
-            ensure_parent_dir("/tmp/credentials.json")
-            with open("/tmp/credentials.json", "w") as f:
-                f.write(raw_credentials_file)
-            os.environ["GOOGLE_CREDENTIALS_FILE"] = "/tmp/credentials.json"
-            print("Credenciales detectadas como JSON inline en GOOGLE_CREDENTIALS_FILE; escritas a /tmp/credentials.json")
-        except Exception as e:
-            print(f"Error al interpretar GOOGLE_CREDENTIALS_FILE como JSON: {e}")
+    if raw_credentials_file:
+        # Limpiar comillas simples adicionales que pueden venir de Vercel
+        cleaned_credentials = raw_credentials_file.strip()
+        if cleaned_credentials.startswith("'") and cleaned_credentials.endswith("'"):
+            cleaned_credentials = cleaned_credentials[1:-1]
+        
+        if cleaned_credentials.startswith("{"):
+            try:
+                json.loads(cleaned_credentials)
+                ensure_parent_dir("/tmp/credentials.json")
+                with open("/tmp/credentials.json", "w") as f:
+                    f.write(cleaned_credentials)
+                os.environ["GOOGLE_CREDENTIALS_FILE"] = "/tmp/credentials.json"
+                print("Credenciales detectadas como JSON inline en GOOGLE_CREDENTIALS_FILE; escritas a /tmp/credentials.json")
+            except Exception as e:
+                print(f"Error al interpretar GOOGLE_CREDENTIALS_FILE como JSON: {e}")
 
     # Procesar token JSON explícito
     if token_json:
@@ -93,16 +99,22 @@ def ensure_google_files_from_env():
     
     # También permitir que GOOGLE_TOKEN_FILE contenga JSON inline
     raw_token_file = os.getenv("GOOGLE_TOKEN_FILE")
-    if raw_token_file and raw_token_file.strip().startswith("{"):
-        try:
-            json.loads(raw_token_file)
-            ensure_parent_dir("/tmp/token.json")
-            with open("/tmp/token.json", "w") as f:
-                f.write(raw_token_file)
-            os.environ["GOOGLE_TOKEN_FILE"] = "/tmp/token.json"
-            print("Token detectado como JSON inline en GOOGLE_TOKEN_FILE; escrito a /tmp/token.json")
-        except Exception as e:
-            print(f"Error al interpretar GOOGLE_TOKEN_FILE como JSON: {e}")
+    if raw_token_file:
+        # Limpiar comillas simples adicionales que pueden venir de Vercel
+        cleaned_token = raw_token_file.strip()
+        if cleaned_token.startswith("'") and cleaned_token.endswith("'"):
+            cleaned_token = cleaned_token[1:-1]
+        
+        if cleaned_token.startswith("{"):
+            try:
+                json.loads(cleaned_token)
+                ensure_parent_dir("/tmp/token.json")
+                with open("/tmp/token.json", "w") as f:
+                    f.write(cleaned_token)
+                os.environ["GOOGLE_TOKEN_FILE"] = "/tmp/token.json"
+                print("Token detectado como JSON inline en GOOGLE_TOKEN_FILE; escrito a /tmp/token.json")
+            except Exception as e:
+                print(f"Error al interpretar GOOGLE_TOKEN_FILE como JSON: {e}")
 
 
 ensure_google_files_from_env()
