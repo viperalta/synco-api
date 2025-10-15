@@ -131,53 +131,7 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Eventos de inicio y cierre de la aplicación
-@app.on_event("startup")
-async def startup_event():
-    """Inicializar conexiones al iniciar la aplicación"""
-    try:
-        # Conectar a MongoDB
-        await mongodb_config.connect()
-        print("✅ MongoDB conectado exitosamente")
-    except Exception as e:
-        print(f"❌ Error al conectar con MongoDB: {e}")
-        # No fallar la aplicación si MongoDB no está disponible
-        print("⚠️ Continuando sin MongoDB (modo degradado)")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cerrar conexiones al finalizar la aplicación"""
-    try:
-        await mongodb_config.disconnect()
-        print("✅ MongoDB desconectado")
-    except Exception as e:
-        print(f"❌ Error al desconectar MongoDB: {e}")
-
-# Middleware para manejar conexiones MongoDB por request
-@app.middleware("http")
-async def mongodb_middleware(request, call_next):
-    """Middleware para asegurar conexión MongoDB en cada request"""
-    try:
-        # Verificar si MongoDB está conectado
-        if mongodb_config.database is None:
-            # Intentar reconectar
-            await mongodb_config.connect()
-            print("🔄 MongoDB reconectado en middleware")
-    except Exception as e:
-        print(f"⚠️ Error en middleware MongoDB: {e}")
-        # En caso de error, intentar con configuración específica de Vercel
-        try:
-            from vercel_mongodb_config import vercel_mongodb_config
-            await vercel_mongodb_config.ensure_connection()
-            # Reemplazar la configuración global
-            mongodb_config.client = vercel_mongodb_config.client
-            mongodb_config.database = vercel_mongodb_config.database
-            print("🔄 MongoDB reconectado con configuración Vercel")
-        except Exception as vercel_error:
-            print(f"⚠️ Error en configuración Vercel: {vercel_error}")
-    
-    response = await call_next(request)
-    return response
+# Sin eventos de startup/shutdown - cada request maneja su propia conexión
 
 # Configurar CORS
 app.add_middleware(
