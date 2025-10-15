@@ -25,10 +25,21 @@ class MongoDBConfig:
             raise ValueError("MONGODB_URL no está configurada en las variables de entorno")
         
         try:
-            self.client = AsyncIOMotorClient(self.mongodb_url)
+            # Configuración optimizada para Vercel/serverless
+            self.client = AsyncIOMotorClient(
+                self.mongodb_url,
+                serverSelectionTimeoutMS=5000,  # 5 segundos timeout
+                connectTimeoutMS=10000,         # 10 segundos para conectar
+                socketTimeoutMS=20000,          # 20 segundos para operaciones
+                maxPoolSize=10,                 # Pool de conexiones limitado
+                minPoolSize=1,                  # Mínimo 1 conexión
+                maxIdleTimeMS=30000,            # 30 segundos idle
+                retryWrites=True,
+                retryReads=True
+            )
             self.database = self.client[self.database_name]
             
-            # Verificar la conexión
+            # Verificar la conexión con timeout
             await self.client.admin.command('ping')
             logger.info(f"Conectado exitosamente a MongoDB Atlas - Base de datos: {self.database_name}")
             

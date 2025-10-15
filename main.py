@@ -249,7 +249,7 @@ async def health_check():
 
 @app.get("/debug/env")
 async def debug_env():
-    """Endpoint de debug para verificar variables de entorno (solo para desarrollo)"""
+    """Endpoint de debug para verificar variables de entorno"""
     return {
         "google_credentials_json_present": bool(os.getenv('GOOGLE_CREDENTIALS_JSON')),
         "google_token_json_present": bool(os.getenv('GOOGLE_TOKEN_JSON')),
@@ -259,8 +259,40 @@ async def debug_env():
         "google_scopes": os.getenv('GOOGLE_SCOPES'),
         "credentials_file_exists": os.path.exists(os.getenv('GOOGLE_CREDENTIALS_FILE', '')),
         "token_file_exists": os.path.exists(os.getenv('GOOGLE_TOKEN_FILE', '')),
-        "google_service_initialized": google_calendar_service is not None
+        "google_service_initialized": google_calendar_service is not None,
+        "mongodb_url_present": bool(os.getenv('MONGODB_URL')),
+        "mongodb_database": os.getenv('MONGODB_DATABASE'),
+        "mongodb_connected": mongodb_config.database is not None
     }
+
+@app.get("/debug/mongodb")
+async def debug_mongodb():
+    """Endpoint de debug específico para MongoDB"""
+    try:
+        # Intentar conectar si no está conectado
+        if mongodb_config.database is None:
+            await mongodb_config.connect()
+        
+        # Probar una operación simple
+        collection = mongodb_config.get_collection("debug_test")
+        result = await collection.insert_one({"test": "connection", "timestamp": datetime.utcnow()})
+        
+        # Limpiar
+        await collection.delete_one({"_id": result.inserted_id})
+        
+        return {
+            "status": "success",
+            "message": "MongoDB conectado y funcionando correctamente",
+            "database": mongodb_config.database_name,
+            "test_inserted_id": str(result.inserted_id)
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error de conexión a MongoDB: {str(e)}",
+            "database": mongodb_config.database_name,
+            "mongodb_url_present": bool(os.getenv('MONGODB_URL'))
+        }
 
 @app.get("/items", response_model=List[ItemModel])
 async def get_items(skip: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=1000)):
