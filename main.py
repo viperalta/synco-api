@@ -15,6 +15,15 @@ load_dotenv()
 
 # Escribir credenciales/token desde variables de entorno a /tmp para entornos serverless (Vercel)
 def ensure_google_files_from_env():
+    # Debug: Mostrar todas las variables de entorno relacionadas con Google
+    print("=== DEBUG: Variables de entorno Google ===")
+    print(f"GOOGLE_CREDENTIALS_JSON presente: {bool(os.getenv('GOOGLE_CREDENTIALS_JSON'))}")
+    print(f"GOOGLE_TOKEN_JSON presente: {bool(os.getenv('GOOGLE_TOKEN_JSON'))}")
+    print(f"GOOGLE_TOKEN_BASE64 presente: {bool(os.getenv('GOOGLE_TOKEN_BASE64'))}")
+    print(f"GOOGLE_CREDENTIALS_FILE: {os.getenv('GOOGLE_CREDENTIALS_FILE')}")
+    print(f"GOOGLE_TOKEN_FILE: {os.getenv('GOOGLE_TOKEN_FILE')}")
+    print(f"GOOGLE_SCOPES: {os.getenv('GOOGLE_SCOPES')}")
+    
     credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
     token_json = os.getenv("GOOGLE_TOKEN_JSON")
     token_base64 = os.getenv("GOOGLE_TOKEN_BASE64")
@@ -37,24 +46,24 @@ def ensure_google_files_from_env():
             with open(credentials_path, "w") as f:
                 f.write(credentials_json)
             os.environ["GOOGLE_CREDENTIALS_FILE"] = credentials_path
-            print(f"Credenciales cargadas desde variable de entorno: {credentials_path}")
+            print(f"Credenciales cargadas desde GOOGLE_CREDENTIALS_JSON: {credentials_path}")
         except json.JSONDecodeError as e:
             print(f"Error: GOOGLE_CREDENTIALS_JSON no es un JSON válido: {e}")
         except Exception as e:
             print(f"Error al procesar credenciales: {e}")
-    else:
-        # También permitir que GOOGLE_CREDENTIALS_FILE contenga JSON inline
-        raw_credentials_file = os.getenv("GOOGLE_CREDENTIALS_FILE")
-        if raw_credentials_file and raw_credentials_file.strip().startswith("{"):
-            try:
-                json.loads(raw_credentials_file)
-                ensure_parent_dir("/tmp/credentials.json")
-                with open("/tmp/credentials.json", "w") as f:
-                    f.write(raw_credentials_file)
-                os.environ["GOOGLE_CREDENTIALS_FILE"] = "/tmp/credentials.json"
-                print("Credenciales detectadas como JSON inline en GOOGLE_CREDENTIALS_FILE; escritas a /tmp/credentials.json")
-            except Exception as e:
-                print(f"Error al interpretar GOOGLE_CREDENTIALS_FILE como JSON: {e}")
+    
+    # También permitir que GOOGLE_CREDENTIALS_FILE contenga JSON inline
+    raw_credentials_file = os.getenv("GOOGLE_CREDENTIALS_FILE")
+    if raw_credentials_file and raw_credentials_file.strip().startswith("{"):
+        try:
+            json.loads(raw_credentials_file)
+            ensure_parent_dir("/tmp/credentials.json")
+            with open("/tmp/credentials.json", "w") as f:
+                f.write(raw_credentials_file)
+            os.environ["GOOGLE_CREDENTIALS_FILE"] = "/tmp/credentials.json"
+            print("Credenciales detectadas como JSON inline en GOOGLE_CREDENTIALS_FILE; escritas a /tmp/credentials.json")
+        except Exception as e:
+            print(f"Error al interpretar GOOGLE_CREDENTIALS_FILE como JSON: {e}")
 
     # Procesar token JSON explícito
     if token_json:
@@ -65,7 +74,7 @@ def ensure_google_files_from_env():
             with open(token_path, "w") as f:
                 f.write(token_json)
             os.environ["GOOGLE_TOKEN_FILE"] = token_path
-            print(f"Token cargado desde variable de entorno: {token_path}")
+            print(f"Token cargado desde GOOGLE_TOKEN_JSON: {token_path}")
         except json.JSONDecodeError as e:
             print(f"Error: GOOGLE_TOKEN_JSON no es un JSON válido: {e}")
         except Exception as e:
@@ -81,19 +90,19 @@ def ensure_google_files_from_env():
             print(f"Token cargado desde base64: {token_path}")
         except Exception as e:
             print(f"Error al procesar token base64: {e}")
-    else:
-        # También permitir que GOOGLE_TOKEN_FILE contenga JSON inline
-        raw_token_file = os.getenv("GOOGLE_TOKEN_FILE")
-        if raw_token_file and raw_token_file.strip().startswith("{"):
-            try:
-                json.loads(raw_token_file)
-                ensure_parent_dir("/tmp/token.json")
-                with open("/tmp/token.json", "w") as f:
-                    f.write(raw_token_file)
-                os.environ["GOOGLE_TOKEN_FILE"] = "/tmp/token.json"
-                print("Token detectado como JSON inline en GOOGLE_TOKEN_FILE; escrito a /tmp/token.json")
-            except Exception as e:
-                print(f"Error al interpretar GOOGLE_TOKEN_FILE como JSON: {e}")
+    
+    # También permitir que GOOGLE_TOKEN_FILE contenga JSON inline
+    raw_token_file = os.getenv("GOOGLE_TOKEN_FILE")
+    if raw_token_file and raw_token_file.strip().startswith("{"):
+        try:
+            json.loads(raw_token_file)
+            ensure_parent_dir("/tmp/token.json")
+            with open("/tmp/token.json", "w") as f:
+                f.write(raw_token_file)
+            os.environ["GOOGLE_TOKEN_FILE"] = "/tmp/token.json"
+            print("Token detectado como JSON inline en GOOGLE_TOKEN_FILE; escrito a /tmp/token.json")
+        except Exception as e:
+            print(f"Error al interpretar GOOGLE_TOKEN_FILE como JSON: {e}")
 
 
 ensure_google_files_from_env()
@@ -204,6 +213,21 @@ async def health_check():
         message="API funcionando correctamente",
         status="healthy"
     )
+
+@app.get("/debug/env")
+async def debug_env():
+    """Endpoint de debug para verificar variables de entorno (solo para desarrollo)"""
+    return {
+        "google_credentials_json_present": bool(os.getenv('GOOGLE_CREDENTIALS_JSON')),
+        "google_token_json_present": bool(os.getenv('GOOGLE_TOKEN_JSON')),
+        "google_token_base64_present": bool(os.getenv('GOOGLE_TOKEN_BASE64')),
+        "google_credentials_file": os.getenv('GOOGLE_CREDENTIALS_FILE'),
+        "google_token_file": os.getenv('GOOGLE_TOKEN_FILE'),
+        "google_scopes": os.getenv('GOOGLE_SCOPES'),
+        "credentials_file_exists": os.path.exists(os.getenv('GOOGLE_CREDENTIALS_FILE', '')),
+        "token_file_exists": os.path.exists(os.getenv('GOOGLE_TOKEN_FILE', '')),
+        "google_service_initialized": google_calendar_service is not None
+    }
 
 @app.get("/items", response_model=List[ItemResponse])
 async def get_items():
