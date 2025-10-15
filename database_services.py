@@ -286,10 +286,27 @@ class LazyService:
     def __init__(self, service_getter):
         self._service_getter = service_getter
         self._service = None
+        self._lock = None
     
     def __getattr__(self, name):
         if self._service is None:
-            self._service = self._service_getter()
+            # Importar asyncio solo cuando sea necesario
+            import asyncio
+            if self._lock is None:
+                self._lock = asyncio.Lock()
+            
+            # Verificar que el event loop esté activo
+            try:
+                loop = asyncio.get_running_loop()
+                if loop.is_closed():
+                    raise RuntimeError("Event loop is closed")
+            except RuntimeError:
+                # No hay event loop activo, crear el servicio directamente
+                self._service = self._service_getter()
+            else:
+                # Event loop activo, crear el servicio
+                self._service = self._service_getter()
+        
         return getattr(self._service, name)
 
 item_service = LazyService(get_item_service)

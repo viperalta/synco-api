@@ -60,8 +60,25 @@ class MongoDBConfig:
     def get_collection(self, collection_name: str):
         """Obtener una colección específica"""
         if self.database is None:
+            # Intentar reconectar si no hay conexión
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                if not loop.is_closed():
+                    # Programar reconexión en el event loop
+                    asyncio.create_task(self._reconnect())
+            except RuntimeError:
+                pass
             raise ValueError("No hay conexión activa a la base de datos")
         return self.database[collection_name]
+    
+    async def _reconnect(self):
+        """Intentar reconectar automáticamente"""
+        try:
+            await self.connect()
+            logger.info("Reconectado automáticamente a MongoDB")
+        except Exception as e:
+            logger.error(f"Error al reconectar automáticamente: {e}")
 
 # Instancia global de configuración
 mongodb_config = MongoDBConfig()
