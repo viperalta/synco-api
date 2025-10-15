@@ -21,7 +21,9 @@ class GoogleCalendarService:
     def __init__(self, credentials_file: str = "credentials.json", token_file: str = "token.json"):
         self.credentials_file = credentials_file
         self.token_file = token_file
-        self.scopes = ['https://www.googleapis.com/auth/calendar.readonly']
+        # Permitir scopes desde variable de entorno (separados por espacios o comas)
+        scopes_env = os.getenv('GOOGLE_SCOPES', 'https://www.googleapis.com/auth/calendar.readonly')
+        self.scopes = [s.strip() for s in scopes_env.replace(',', ' ').split() if s.strip()]
         self.service = None
         self._authenticate()
     

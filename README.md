@@ -78,21 +78,20 @@ vercel
 vercel --prod
 ```
 
-### 5. Variables de entorno necesarias en Vercel
+### 5. Variables de entorno necesarias
 
-Configura estas variables en Vercel → Project → Settings → Environment Variables (Targets: Production y Preview):
+**OBLIGATORIO**: Configura estas variables tanto para desarrollo local como para producción:
+
+#### Para Vercel (Production/Preview):
+Configura en Vercel → Project → Settings → Environment Variables:
 
 - `GOOGLE_CREDENTIALS_JSON` → Contenido completo de tu `credentials.json` (JSON)
 - `GOOGLE_TOKEN_JSON` → Contenido JSON del token (ver conversión más abajo)
-- `GOOGLE_SCOPES` → `https://www.googleapis.com/auth/calendar.readonly`
-- `DEFAULT_CALENDAR_ID` → `primary` (opcional)
 
-Opcional (solo si prefieres mantener el token como binario pickle):
-- `GOOGLE_TOKEN_BASE64` → El `token.json` binario codificado en base64
+#### Para desarrollo local:
+Crea un archivo `.env` en la raíz del proyecto con las mismas variables.
 
-Notas importantes:
-- La app escribe estos valores a archivos temporales en `/tmp` al iniciar (serverless), por lo que no necesitas subir archivos al repo.
-- Si defines `GOOGLE_TOKEN_JSON`, se usará ese formato; si no, y defines `GOOGLE_TOKEN_BASE64`, se decodificará a binario.
+**Nota importante**: La API ahora requiere variables de entorno en todos los entornos. No lee archivos físicos del sistema de archivos.
 
 ### 6. Convertir el token de pickle a JSON (recomendado)
 
@@ -176,9 +175,23 @@ Para usar los endpoints de Google Calendar, sigue la guía completa en [GOOGLE_C
 4. Descargar `credentials.json`
 5. Configurar variables de entorno
 
-## Variables de entorno (opcional)
-Puedes crear un archivo `.env` para variables de entorno:
-```
+## ⚠️ Solución de Error 503
+
+Si recibes error 503 en los endpoints de Google Calendar, consulta la guía detallada en [ENV_SETUP.md](ENV_SETUP.md) para configurar correctamente las variables de entorno en entornos serverless.
+
+**Solución rápida:**
+1. Usa `python convert_to_env_format.py` para generar las variables de entorno
+2. Configura `GOOGLE_CREDENTIALS_JSON` y `GOOGLE_TOKEN_JSON` en Vercel
+3. Asegúrate de que el JSON esté en una sola línea sin saltos de línea
+
+## Variables de entorno (OBLIGATORIO)
+Debes crear un archivo `.env` para variables de entorno:
+```env
+# Google Calendar API (OBLIGATORIO)
+GOOGLE_CREDENTIALS_JSON={"type":"service_account",...}
+GOOGLE_TOKEN_JSON={"token":"...","refresh_token":"...",...}
+
+# Otras variables opcionales
 DATABASE_URL=your_database_url
 API_KEY=your_api_key
 ```
