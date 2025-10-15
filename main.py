@@ -9,6 +9,9 @@ import json
 import base64
 from dotenv import load_dotenv
 from google_calendar_service import GoogleCalendarService
+from mongodb_config import mongodb_config
+from models import ItemModel, ItemCreate, ItemUpdate, AttendanceRequest, AttendanceResponse, EventAttendanceModel
+from database_services import item_service, calendar_event_service, calendar_service, event_attendance_service
 
 # Cargar variables de entorno
 load_dotenv()
@@ -122,11 +125,33 @@ ensure_google_files_from_env()
 # Crear instancia de FastAPI
 app = FastAPI(
     title="Synco API",
-    description="API REST con FastAPI para Synco",
+    description="API REST con FastAPI para Synco con MongoDB",
     version="1.0.0",
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+# Eventos de inicio y cierre de la aplicación
+@app.on_event("startup")
+async def startup_event():
+    """Inicializar conexiones al iniciar la aplicación"""
+    try:
+        # Conectar a MongoDB
+        await mongodb_config.connect()
+        print("✅ MongoDB conectado exitosamente")
+    except Exception as e:
+        print(f"❌ Error al conectar con MongoDB: {e}")
+        # No fallar la aplicación si MongoDB no está disponible
+        print("⚠️ Continuando sin MongoDB (modo degradado)")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Cerrar conexiones al finalizar la aplicación"""
+    try:
+        await mongodb_config.disconnect()
+        print("✅ MongoDB desconectado")
+    except Exception as e:
+        print(f"❌ Error al desconectar MongoDB: {e}")
 
 # Configurar CORS
 app.add_middleware(
@@ -177,11 +202,7 @@ class CalendarResponse(BaseModel):
     backgroundColor: str
     foregroundColor: str
 
-# Base de datos en memoria (para ejemplo)
-items_db: List[Item] = [
-    Item(id=1, name="Producto 1", description="Descripción del producto 1", price=29.99),
-    Item(id=2, name="Producto 2", description="Descripción del producto 2", price=49.99),
-]
+# Los items ahora se almacenan en MongoDB
 
 # Inicializar servicio de Google Calendar
 google_calendar_service = None
@@ -241,49 +262,65 @@ async def debug_env():
         "google_service_initialized": google_calendar_service is not None
     }
 
-@app.get("/items", response_model=List[ItemResponse])
-async def get_items():
-    """Obtener todos los items"""
-    return items_db
+@app.get("/items", response_model=List[ItemModel])
+async def get_items(skip: int = Query(default=0, ge=0), limit: int = Query(default=100, ge=1, le=1000)):
+    """Obtener todos los items desde MongoDB"""
+    try:
+        items = await item_service.get_items(skip=skip, limit=limit)
+        return items
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener items: {str(e)}")
 
-@app.get("/items/{item_id}", response_model=ItemResponse)
-async def get_item(item_id: int):
-    """Obtener un item específico por ID"""
-    for item in items_db:
-        if item.id == item_id:
-            return item
-    raise HTTPException(status_code=404, detail="Item no encontrado")
+@app.get("/items/{item_id}", response_model=ItemModel)
+async def get_item(item_id: str):
+    """Obtener un item específico por ID desde MongoDB"""
+    try:
+        item = await item_service.get_item(item_id)
+        if not item:
+            raise HTTPException(status_code=404, detail="Item no encontrado")
+        return item
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener item: {str(e)}")
 
-@app.post("/items", response_model=ItemResponse)
-async def create_item(item: Item):
-    """Crear un nuevo item"""
-    # Generar nuevo ID
-    new_id = max([i.id for i in items_db], default=0) + 1
-    item.id = new_id
-    items_db.append(item)
-    return item
+@app.post("/items", response_model=ItemModel)
+async def create_item(item: ItemCreate):
+    """Crear un nuevo item en MongoDB"""
+    try:
+        created_item = await item_service.create_item(item)
+        return created_item
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al crear item: {str(e)}")
 
-@app.put("/items/{item_id}", response_model=ItemResponse)
-async def update_item(item_id: int, item: Item):
-    """Actualizar un item existente"""
-    for i, existing_item in enumerate(items_db):
-        if existing_item.id == item_id:
-            item.id = item_id
-            items_db[i] = item
-            return item
-    raise HTTPException(status_code=404, detail="Item no encontrado")
+@app.put("/items/{item_id}", response_model=ItemModel)
+async def update_item(item_id: str, item: ItemUpdate):
+    """Actualizar un item existente en MongoDB"""
+    try:
+        updated_item = await item_service.update_item(item_id, item)
+        if not updated_item:
+            raise HTTPException(status_code=404, detail="Item no encontrado")
+        return updated_item
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al actualizar item: {str(e)}")
 
 @app.delete("/items/{item_id}", response_model=MessageResponse)
-async def delete_item(item_id: int):
-    """Eliminar un item"""
-    for i, item in enumerate(items_db):
-        if item.id == item_id:
-            items_db.pop(i)
-            return MessageResponse(
-                message=f"Item {item_id} eliminado correctamente",
-                status="success"
-            )
-    raise HTTPException(status_code=404, detail="Item no encontrado")
+async def delete_item(item_id: str):
+    """Eliminar un item de MongoDB"""
+    try:
+        deleted = await item_service.delete_item(item_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Item no encontrado")
+        return MessageResponse(
+            message=f"Item {item_id} eliminado correctamente",
+            status="success"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al eliminar item: {str(e)}")
 
 # Rutas de Google Calendar
 
@@ -373,6 +410,93 @@ async def get_eventos_por_calendario(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener eventos: {str(e)}")
+
+# Rutas de Asistencia a Eventos
+
+@app.post("/asistir", response_model=AttendanceResponse)
+async def asistir_evento(attendance_request: AttendanceRequest):
+    """
+    Registrar asistencia de un usuario a un evento
+    
+    - **event_id**: ID del evento de Google Calendar
+    - **user_name**: Nombre del usuario que asistirá
+    """
+    try:
+        result = await event_attendance_service.add_attendance(
+            attendance_request.event_id, 
+            attendance_request.user_name
+        )
+        return result
+    except ValueError as e:
+        # Usuario ya existe
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al registrar asistencia: {str(e)}")
+
+@app.get("/asistencia/{event_id}", response_model=AttendanceResponse)
+async def obtener_asistencia_evento(event_id: str):
+    """
+    Obtener la lista de asistentes de un evento específico
+    
+    - **event_id**: ID del evento de Google Calendar
+    """
+    try:
+        attendance = await event_attendance_service.get_attendance(event_id)
+        if not attendance:
+            return AttendanceResponse(
+                event_id=event_id,
+                attendees=[],
+                total_attendees=0,
+                message="No hay asistentes registrados para este evento"
+            )
+        
+        return AttendanceResponse(
+            event_id=event_id,
+            attendees=attendance.attendees,
+            total_attendees=len(attendance.attendees),
+            message=f"Total de asistentes: {len(attendance.attendees)}"
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener asistencia: {str(e)}")
+
+@app.get("/asistencias", response_model=List[EventAttendanceModel])
+async def obtener_todas_asistencias(
+    skip: int = Query(default=0, ge=0), 
+    limit: int = Query(default=100, ge=1, le=1000)
+):
+    """
+    Obtener todas las asistencias registradas con paginación
+    
+    - **skip**: Número de registros a saltar
+    - **limit**: Número máximo de registros a retornar
+    """
+    try:
+        attendances = await event_attendance_service.get_all_attendances(skip=skip, limit=limit)
+        return attendances
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al obtener asistencias: {str(e)}")
+
+@app.delete("/asistencia/{event_id}/{user_name}", response_model=MessageResponse)
+async def cancelar_asistencia(event_id: str, user_name: str):
+    """
+    Cancelar asistencia de un usuario a un evento
+    
+    - **event_id**: ID del evento de Google Calendar
+    - **user_name**: Nombre del usuario
+    """
+    try:
+        removed = await event_attendance_service.remove_attendance(event_id, user_name)
+        if not removed:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado en la lista de asistentes")
+        
+        return MessageResponse(
+            message=f"Asistencia de '{user_name}' cancelada exitosamente",
+            status="success"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al cancelar asistencia: {str(e)}")
 
 # Función para ejecutar localmente
 if __name__ == "__main__":
