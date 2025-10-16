@@ -74,11 +74,6 @@ def create_attendance_section(attendees: List[str], non_attendees: List[str] = N
     section = "--- ASISTENCIA ---\n"
     
     # Información básica
-    if is_all_day:
-        section += f"📅 Evento de todo el día\n"
-    else:
-        section += f"⏰ Evento con horario específico\n"
-    
     section += f"👥 Total de asistentes: {total_attendees}\n"
     section += f"❌ Total de no asistentes: {total_non_attendees}\n"
     section += f"🕒 Última actualización: {current_time}\n\n"
