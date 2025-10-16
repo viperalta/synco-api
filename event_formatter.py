@@ -7,6 +7,7 @@ from typing import List, Dict, Optional
 
 def format_event_description_with_attendance(
     attendees: List[str], 
+    non_attendees: List[str] = None,
     original_description: str = "",
     event_start: Optional[Dict] = None
 ) -> str:
@@ -15,6 +16,7 @@ def format_event_description_with_attendance(
     
     Args:
         attendees: Lista de nombres de asistentes
+        non_attendees: Lista de nombres de no asistentes (opcional)
         original_description: Descripción original del evento
         event_start: Información de inicio del evento (para detectar si es todo el día)
     
@@ -27,7 +29,7 @@ def format_event_description_with_attendance(
         is_all_day = True
     
     # Crear sección de asistencia
-    attendance_section = create_attendance_section(attendees, is_all_day)
+    attendance_section = create_attendance_section(attendees, non_attendees or [], is_all_day)
     
     # Combinar con descripción original
     if original_description and original_description.strip():
@@ -52,12 +54,13 @@ def format_event_description_with_attendance(
         return attendance_section
 
 
-def create_attendance_section(attendees: List[str], is_all_day: bool = False) -> str:
+def create_attendance_section(attendees: List[str], non_attendees: List[str] = None, is_all_day: bool = False) -> str:
     """
     Crear la sección de asistencia para la descripción del evento
     
     Args:
         attendees: Lista de nombres de asistentes
+        non_attendees: Lista de nombres de no asistentes (opcional)
         is_all_day: Si el evento es de todo el día
     
     Returns:
@@ -65,6 +68,7 @@ def create_attendance_section(attendees: List[str], is_all_day: bool = False) ->
     """
     current_time = datetime.now().strftime("%d/%m/%Y %H:%M")
     total_attendees = len(attendees)
+    total_non_attendees = len(non_attendees or [])
     
     # Header de la sección
     section = "--- ASISTENCIA ---\n"
@@ -76,6 +80,7 @@ def create_attendance_section(attendees: List[str], is_all_day: bool = False) ->
         section += f"⏰ Evento con horario específico\n"
     
     section += f"👥 Total de asistentes: {total_attendees}\n"
+    section += f"❌ Total de no asistentes: {total_non_attendees}\n"
     section += f"🕒 Última actualización: {current_time}\n\n"
     
     # Lista de asistentes
@@ -85,6 +90,12 @@ def create_attendance_section(attendees: List[str], is_all_day: bool = False) ->
             section += f"{i}. {attendee}\n"
     else:
         section += "❌ No hay asistentes confirmados aún\n"
+    
+    # Lista de no asistentes
+    if non_attendees:
+        section += "\n❌ NO ASISTIRÁN:\n"
+        for i, non_attendee in enumerate(non_attendees, 1):
+            section += f"{i}. {non_attendee}\n"
     
     return section
 
@@ -113,22 +124,25 @@ def extract_original_description(event_description: str) -> str:
     return '\n'.join(original_lines).strip()
 
 
-def parse_attendance_from_description(event_description: str) -> List[str]:
+def parse_attendance_from_description(event_description: str) -> tuple[List[str], List[str]]:
     """
-    Extraer lista de asistentes desde la descripción del evento
+    Extraer listas de asistentes y no asistentes desde la descripción del evento
     
     Args:
         event_description: Descripción del evento
     
     Returns:
-        Lista de nombres de asistentes
+        Tupla con (lista de asistentes, lista de no asistentes)
     """
     if not event_description:
-        return []
+        return [], []
     
     attendees = []
+    non_attendees = []
     lines = event_description.split('\n')
     in_attendance_section = False
+    in_attendees_section = False
+    in_non_attendees_section = False
     
     for line in lines:
         line = line.strip()
@@ -138,19 +152,29 @@ def parse_attendance_from_description(event_description: str) -> List[str]:
             continue
         
         if in_attendance_section and line.startswith('✅ ASISTENTES CONFIRMADOS:'):
+            in_attendees_section = True
+            in_non_attendees_section = False
             continue
         
-        if in_attendance_section and line and not line.startswith('📅') and not line.startswith('⏰') and not line.startswith('👥') and not line.startswith('🕒') and not line.startswith('❌'):
-            # Es una línea de asistente (formato: "1. Nombre" o "Nombre")
+        if in_attendance_section and line.startswith('❌ NO ASISTIRÁN:'):
+            in_attendees_section = False
+            in_non_attendees_section = True
+            continue
+        
+        if in_attendance_section and line and not line.startswith('📅') and not line.startswith('⏰') and not line.startswith('👥') and not line.startswith('🕒') and not line.startswith('❌') and not line.startswith('✅'):
+            # Es una línea de asistente o no asistente (formato: "1. Nombre" o "Nombre")
             if '. ' in line:
-                attendee = line.split('. ', 1)[1].strip()
+                name = line.split('. ', 1)[1].strip()
             else:
-                attendee = line.strip()
+                name = line.strip()
             
-            if attendee and attendee not in ['--- ASISTENCIA ---']:
-                attendees.append(attendee)
+            if name and name not in ['--- ASISTENCIA ---']:
+                if in_attendees_section:
+                    attendees.append(name)
+                elif in_non_attendees_section:
+                    non_attendees.append(name)
     
-    return attendees
+    return attendees, non_attendees
 
 
 def is_all_day_event(event_start: Dict) -> bool:

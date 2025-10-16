@@ -216,8 +216,8 @@ class CalendarService:
 class EventAttendanceService:
     """Servicio de asistencia compatible con Vercel (conexión por request)"""
     
-    async def add_attendance(self, event_id: str, user_name: str) -> AttendanceResponse:
-        """Agregar un usuario a la lista de asistentes de un evento"""
+    async def add_attendance(self, event_id: str, user_name: str, will_attend: bool = True) -> AttendanceResponse:
+        """Agregar un usuario a la lista de asistentes o no asistentes de un evento"""
         client, database = await get_mongodb_connection()
         collection = database["event_attendances"]
         
@@ -226,52 +226,96 @@ class EventAttendanceService:
             existing_attendance = await collection.find_one({"event_id": event_id})
             
             if existing_attendance:
-                # Verificar si el usuario ya está en la lista
-                if user_name in existing_attendance["attendees"]:
-                    raise ValueError(f"El usuario '{user_name}' ya está registrado para asistir a este evento")
-                
-                # Agregar el usuario a la lista existente
-                await collection.update_one(
-                    {"event_id": event_id},
-                    {
-                        "$push": {"attendees": user_name},
-                        "$set": {"updated_at": datetime.utcnow()}
-                    }
-                )
+                # Verificar si el usuario ya está en alguna lista
+                if user_name in existing_attendance.get("attendees", []):
+                    if will_attend:
+                        raise ValueError(f"El usuario '{user_name}' ya está registrado para asistir a este evento")
+                    else:
+                        # Mover de asistentes a no asistentes
+                        await collection.update_one(
+                            {"event_id": event_id},
+                            {
+                                "$pull": {"attendees": user_name},
+                                "$push": {"non_attendees": user_name},
+                                "$set": {"updated_at": datetime.utcnow()}
+                            }
+                        )
+                elif user_name in existing_attendance.get("non_attendees", []):
+                    if not will_attend:
+                        raise ValueError(f"El usuario '{user_name}' ya está registrado para NO asistir a este evento")
+                    else:
+                        # Mover de no asistentes a asistentes
+                        await collection.update_one(
+                            {"event_id": event_id},
+                            {
+                                "$pull": {"non_attendees": user_name},
+                                "$push": {"attendees": user_name},
+                                "$set": {"updated_at": datetime.utcnow()}
+                            }
+                        )
+                else:
+                    # Usuario no está en ninguna lista, agregarlo a la correspondiente
+                    if will_attend:
+                        await collection.update_one(
+                            {"event_id": event_id},
+                            {
+                                "$push": {"attendees": user_name},
+                                "$set": {"updated_at": datetime.utcnow()}
+                            }
+                        )
+                    else:
+                        await collection.update_one(
+                            {"event_id": event_id},
+                            {
+                                "$push": {"non_attendees": user_name},
+                                "$set": {"updated_at": datetime.utcnow()}
+                            }
+                        )
                 
                 # Obtener el registro actualizado
                 updated_attendance = await collection.find_one({"event_id": event_id})
-                attendees = updated_attendance["attendees"]
+                attendees = updated_attendance.get("attendees", [])
+                non_attendees = updated_attendance.get("non_attendees", [])
             else:
                 # Crear nuevo registro para este evento
                 attendance_data = {
                     "event_id": event_id,
-                    "attendees": [user_name],
+                    "attendees": [user_name] if will_attend else [],
+                    "non_attendees": [] if will_attend else [user_name],
                     "created_at": datetime.utcnow(),
                     "updated_at": datetime.utcnow()
                 }
                 
                 await collection.insert_one(attendance_data)
-                attendees = [user_name]
+                attendees = attendance_data["attendees"]
+                non_attendees = attendance_data["non_attendees"]
             
+            action = "asistir" if will_attend else "NO asistir"
             return AttendanceResponse(
                 event_id=event_id,
                 attendees=attendees,
+                non_attendees=non_attendees,
                 total_attendees=len(attendees),
-                message=f"Usuario '{user_name}' agregado exitosamente a la lista de asistentes"
+                total_non_attendees=len(non_attendees),
+                message=f"Usuario '{user_name}' registrado para {action} a este evento"
             )
         finally:
             # Cerrar conexión
             client.close()
     
     async def get_attendance(self, event_id: str) -> Optional[EventAttendanceModel]:
-        """Obtener la lista de asistentes de un evento"""
+        """Obtener la lista de asistentes y no asistentes de un evento"""
         client, database = await get_mongodb_connection()
         collection = database["event_attendances"]
         
         try:
             attendance = await collection.find_one({"event_id": event_id})
-            return EventAttendanceModel(**attendance) if attendance else None
+            if attendance:
+                # Asegurar que los campos existan
+                attendance.setdefault("attendees", [])
+                attendance.setdefault("non_attendees", [])
+                return EventAttendanceModel(**attendance)
+            return None
         finally:
             client.close()
     
@@ -284,13 +328,16 @@ class EventAttendanceService:
             cursor = collection.find().skip(skip).limit(limit)
             attendances = []
             async for attendance in cursor:
+                # Asegurar que los campos existan
+                attendance.setdefault("attendees", [])
+                attendance.setdefault("non_attendees", [])
                 attendances.append(EventAttendanceModel(**attendance))
             return attendances
         finally:
             client.close()
     
     async def remove_attendance(self, event_id: str, user_name: str) -> bool:
-        """Remover un usuario de la lista de asistentes"""
+        """Remover un usuario de cualquier lista (asistentes o no asistentes)"""
         client, database = await get_mongodb_connection()
         collection = database["event_attendances"]
         
@@ -298,7 +345,10 @@ class EventAttendanceService:
             result = await collection.update_one(
                 {"event_id": event_id},
                 {
-                    "$pull": {"attendees": user_name},
+                    "$pull": {
+                        "attendees": user_name,
+                        "non_attendees": user_name
+                    },
                     "$set": {"updated_at": datetime.utcnow()}
                 }
             )

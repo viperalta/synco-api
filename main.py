@@ -454,18 +454,20 @@ async def get_eventos_por_calendario(
 
 # Funciones auxiliares para actualización de Google Calendar
 
-async def update_google_calendar_event_description(event_id: str, attendees: List[str], calendar_id: str = "primary"):
+async def update_google_calendar_event_description(event_id: str, attendees: List[str], non_attendees: List[str] = None, calendar_id: str = "primary"):
     """
     Actualizar la descripción de un evento en Google Calendar con información de asistencia
     
     Args:
         event_id: ID del evento a actualizar
         attendees: Lista de asistentes
+        non_attendees: Lista de no asistentes (opcional)
         calendar_id: ID del calendario (por defecto 'primary')
     """
     try:
         print(f"🔄 Iniciando actualización de evento {event_id} en Google Calendar")
         print(f"📋 Asistentes a procesar: {attendees}")
+        print(f"📋 No asistentes a procesar: {non_attendees or []}")
         
         # 1. Obtener el evento actual de Google Calendar
         print(f"📥 Obteniendo evento actual de Google Calendar...")
@@ -480,6 +482,7 @@ async def update_google_calendar_event_description(event_id: str, attendees: Lis
         print(f"🎨 Formateando nueva descripción...")
         new_description = format_event_description_with_attendance(
             attendees=attendees,
+            non_attendees=non_attendees or [],
             original_description=original_description,
             event_start=current_event.get('start', {})
         )
@@ -501,6 +504,7 @@ async def update_google_calendar_event_description(event_id: str, attendees: Lis
         updated_event = google_calendar_service.update_event(calendar_id, event_id, event_data)
         print(f"✅ Evento {event_id} actualizado exitosamente en Google Calendar")
         print(f"📊 Total de asistentes procesados: {len(attendees)}")
+        print(f"📊 Total de no asistentes procesados: {len(non_attendees or [])}")
         
         return updated_event
         
@@ -516,16 +520,18 @@ async def update_google_calendar_event_description(event_id: str, attendees: Lis
 @app.post("/asistir", response_model=AttendanceResponse)
 async def asistir_evento(attendance_request: AttendanceRequest):
     """
-    Registrar asistencia de un usuario a un evento
+    Registrar asistencia o no asistencia de un usuario a un evento
     
     - **event_id**: ID del evento de Google Calendar
-    - **user_name**: Nombre del usuario que asistirá
+    - **user_name**: Nombre del usuario
+    - **will_attend**: True si asiste, False si no asiste (por defecto True)
     """
     try:
-        # 1. Registrar asistencia en MongoDB
+        # 1. Registrar asistencia/no asistencia en MongoDB
         result = await event_attendance_service.add_attendance(
             attendance_request.event_id, 
-            attendance_request.user_name
+            attendance_request.user_name,
+            attendance_request.will_attend
         )
         
         # 2. Actualizar descripción en Google Calendar
@@ -534,6 +540,7 @@ async def asistir_evento(attendance_request: AttendanceRequest):
                 await update_google_calendar_event_description(
                     attendance_request.event_id, 
                     result.attendees,
+                    result.non_attendees,
                     calendar_id="d7dd701e2bb45dee1e2863fddb2b15354bd4f073a1350338cb66b9ee7789f9bb@group.calendar.google.com"
                 )
             except Exception as calendar_error:
@@ -552,7 +559,7 @@ async def asistir_evento(attendance_request: AttendanceRequest):
 @app.get("/asistencia/{event_id}", response_model=AttendanceResponse)
 async def obtener_asistencia_evento(event_id: str):
     """
-    Obtener la lista de asistentes de un evento específico
+    Obtener la lista de asistentes y no asistentes de un evento específico
     
     - **event_id**: ID del evento de Google Calendar
     """
@@ -562,15 +569,19 @@ async def obtener_asistencia_evento(event_id: str):
             return AttendanceResponse(
                 event_id=event_id,
                 attendees=[],
+                non_attendees=[],
                 total_attendees=0,
-                message="No hay asistentes registrados para este evento"
+                total_non_attendees=0,
+                message="No hay registros de asistencia para este evento"
             )
         
         return AttendanceResponse(
             event_id=event_id,
             attendees=attendance.attendees,
+            non_attendees=attendance.non_attendees,
             total_attendees=len(attendance.attendees),
-            message=f"Total de asistentes: {len(attendance.attendees)}"
+            total_non_attendees=len(attendance.non_attendees),
+            message=f"Total de asistentes: {len(attendance.attendees)}, Total de no asistentes: {len(attendance.non_attendees)}"
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener asistencia: {str(e)}")
@@ -606,9 +617,10 @@ async def cancelar_asistencia(event_id: str, user_name: str):
         if not removed:
             raise HTTPException(status_code=404, detail="Usuario no encontrado en la lista de asistentes")
         
-        # 2. Obtener lista actualizada de asistentes
+        # 2. Obtener lista actualizada de asistentes y no asistentes
         attendance = await event_attendance_service.get_attendance(event_id)
         updated_attendees = attendance.attendees if attendance else []
+        updated_non_attendees = attendance.non_attendees if attendance else []
         
         # 3. Actualizar descripción en Google Calendar
         if google_calendar_service:
@@ -616,6 +628,7 @@ async def cancelar_asistencia(event_id: str, user_name: str):
                 await update_google_calendar_event_description(
                     event_id, 
                     updated_attendees,
+                    updated_non_attendees,
                     calendar_id="d7dd701e2bb45dee1e2863fddb2b15354bd4f073a1350338cb66b9ee7789f9bb@group.calendar.google.com"
                 )
             except Exception as calendar_error:
@@ -680,7 +693,9 @@ async def get_eventos_con_asistencia(
                 evento_con_asistencia = evento.copy()
                 evento_con_asistencia["asistencia"] = {
                     "attendees": attendance.attendees,
+                    "non_attendees": attendance.non_attendees,
                     "total_attendees": len(attendance.attendees),
+                    "total_non_attendees": len(attendance.non_attendees),
                     "created_at": attendance.created_at.isoformat() if attendance.created_at else None,
                     "updated_at": attendance.updated_at.isoformat() if attendance.updated_at else None
                 }

@@ -100,6 +100,7 @@ class EventAttendanceModel(BaseModel):
     id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
     event_id: str  # ID del evento de Google Calendar
     attendees: List[str] = []  # Lista de nombres de usuarios que asistirán
+    non_attendees: List[str] = []  # Lista de nombres de usuarios que NO asistirán
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -111,9 +112,12 @@ class EventAttendanceModel(BaseModel):
 class AttendanceRequest(BaseModel):
     event_id: str
     user_name: str
+    will_attend: bool = True  # True si asiste, False si no asiste
 
 class AttendanceResponse(BaseModel):
     event_id: str
     attendees: List[str]
+    non_attendees: List[str]
     total_attendees: int
+    total_non_attendees: int
     message: str
