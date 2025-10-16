@@ -603,17 +603,20 @@ async def obtener_todas_asistencias(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener asistencias: {str(e)}")
 
-@app.delete("/asistencia/{event_id}/{user_name}", response_model=MessageResponse)
-async def cancelar_asistencia(event_id: str, user_name: str):
+class CancelAttendanceRequest(BaseModel):
+    user_name: str
+
+@app.delete("/cancelar-asistencia/{event_id}", response_model=MessageResponse)
+async def cancelar_asistencia(event_id: str, request: CancelAttendanceRequest):
     """
     Cancelar asistencia de un usuario a un evento
     
     - **event_id**: ID del evento de Google Calendar
-    - **user_name**: Nombre del usuario
+    - **user_name**: Nombre del usuario (en el body)
     """
     try:
         # 1. Remover asistencia de MongoDB
-        removed = await event_attendance_service.remove_attendance(event_id, user_name)
+        removed = await event_attendance_service.remove_attendance(event_id, request.user_name)
         if not removed:
             raise HTTPException(status_code=404, detail="Usuario no encontrado en la lista de asistentes")
         
@@ -636,7 +639,7 @@ async def cancelar_asistencia(event_id: str, user_name: str):
                 print(f"⚠️ Error al actualizar Google Calendar: {calendar_error}")
         
         return MessageResponse(
-            message=f"Asistencia de '{user_name}' cancelada exitosamente",
+            message=f"Asistencia de '{request.user_name}' cancelada exitosamente",
             status="success"
         )
     except HTTPException:
