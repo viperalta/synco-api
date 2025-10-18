@@ -104,6 +104,11 @@ class SessionService:
     
     def set_session_cookie(self, response: Response, session_token: str):
         """Establecer cookie de sesión httpOnly"""
+        import os
+        
+        # Determinar el dominio basándose en el entorno
+        domain = os.getenv("COOKIE_DOMAIN", ".pasesfalsos.cl")
+        
         response.set_cookie(
             key=self.session_cookie_name,
             value=session_token,
@@ -111,14 +116,19 @@ class SessionService:
             httponly=True,
             secure=True,  # Solo HTTPS en producción
             samesite="lax",  # Para subdominios
-            domain=".pasesfalsos.cl"  # Para subdominios
+            domain=domain  # Para subdominios
         )
     
     def clear_session_cookie(self, response: Response):
         """Limpiar cookie de sesión"""
+        import os
+        
+        # Determinar el dominio basándose en el entorno
+        domain = os.getenv("COOKIE_DOMAIN", ".pasesfalsos.cl")
+        
         response.delete_cookie(
             key=self.session_cookie_name,
-            domain=".pasesfalsos.cl",
+            domain=domain,
             samesite="lax"
         )
     
