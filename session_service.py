@@ -109,6 +109,13 @@ class SessionService:
         # Determinar el dominio basándose en el entorno
         domain = os.getenv("COOKIE_DOMAIN", ".pasesfalsos.cl")
         
+        # Asegurar que el dominio tenga el punto al inicio para subdominios
+        if domain and not domain.startswith('.'):
+            domain = f".{domain}"
+        
+        print(f"=== DEBUG: Creando cookie con dominio: {domain} ===")
+        print(f"=== DEBUG: Nombre de cookie: {self.session_cookie_name} ===")
+        
         response.set_cookie(
             key=self.session_cookie_name,
             value=session_token,
@@ -118,6 +125,8 @@ class SessionService:
             samesite="lax",  # Para subdominios
             domain=domain  # Para subdominios
         )
+        
+        print(f"=== DEBUG: Cookie creada exitosamente ===")
     
     def clear_session_cookie(self, response: Response):
         """Limpiar cookie de sesión"""
@@ -126,11 +135,40 @@ class SessionService:
         # Determinar el dominio basándose en el entorno
         domain = os.getenv("COOKIE_DOMAIN", ".pasesfalsos.cl")
         
+        # Asegurar que el dominio tenga el punto al inicio para subdominios
+        if domain and not domain.startswith('.'):
+            domain = f".{domain}"
+        
+        print(f"=== DEBUG: Eliminando cookie con dominio: {domain} ===")
+        print(f"=== DEBUG: Nombre de cookie: {self.session_cookie_name} ===")
+        
+        # Eliminar cookie para el dominio principal
         response.delete_cookie(
             key=self.session_cookie_name,
             domain=domain,
             samesite="lax"
         )
+        
+        # También eliminar cookie sin dominio (para localhost)
+        response.delete_cookie(
+            key=self.session_cookie_name,
+            samesite="lax"
+        )
+        
+        # En producción, también eliminar para subdominios específicos
+        if domain == ".pasesfalsos.cl":
+            response.delete_cookie(
+                key=self.session_cookie_name,
+                domain="api.pasesfalsos.cl",
+                samesite="lax"
+            )
+            response.delete_cookie(
+                key=self.session_cookie_name,
+                domain="www.pasesfalsos.cl",
+                samesite="lax"
+            )
+        
+        print(f"=== DEBUG: Cookie eliminada exitosamente ===")
     
     async def cleanup_expired_sessions(self) -> int:
         """Limpiar sesiones expiradas"""
