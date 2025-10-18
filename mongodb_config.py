@@ -57,6 +57,12 @@ class MongoDBConfig:
             self.client.close()
             logger.info("Desconectado de MongoDB")
     
+    def get_database(self):
+        """Obtener la instancia de la base de datos"""
+        if self.database is None:
+            raise ValueError("No hay conexión activa a la base de datos")
+        return self.database
+    
     def get_collection(self, collection_name: str):
         """Obtener una colección específica"""
         if self.database is None:

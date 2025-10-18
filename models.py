@@ -121,3 +121,62 @@ class AttendanceResponse(BaseModel):
     total_attendees: int
     total_non_attendees: int
     message: str
+
+# Modelos para autenticación
+class UserModel(BaseModel):
+    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    google_id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        populate_by_name = True
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+
+class TokenData(BaseModel):
+    user_id: Optional[str] = None
+    email: Optional[str] = None
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str
+    expires_in: int
+    user: UserModel
+
+class GoogleUserInfo(BaseModel):
+    id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+    verified_email: bool = True
+
+class RefreshTokenModel(BaseModel):
+    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    user_id: str
+    token: str
+    is_active: bool = True
+    expires_at: datetime
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        populate_by_name = True
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+
+class TokenRefreshRequest(BaseModel):
+    refresh_token: str
+
+class TokenRefreshResponse(BaseModel):
+    access_token: str
+    token_type: str
+    expires_in: int
+
+class TokenRevokeRequest(BaseModel):
+    refresh_token: str

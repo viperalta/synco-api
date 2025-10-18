@@ -1,5 +1,6 @@
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Depends, status, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -7,15 +8,28 @@ import uvicorn
 import os
 import json
 import base64
+import httpx
+from urllib.parse import urlencode
 from dotenv import load_dotenv
 from google_calendar_service import GoogleCalendarService
 from mongodb_config import mongodb_config
-from models import ItemModel, ItemCreate, ItemUpdate, AttendanceRequest, AttendanceResponse, EventAttendanceModel
+from models import ItemModel, ItemCreate, ItemUpdate, AttendanceRequest, AttendanceResponse, EventAttendanceModel, UserModel, TokenResponse, GoogleUserInfo, TokenRefreshRequest, TokenRefreshResponse, TokenRevokeRequest
 from database_services import item_service, calendar_event_service, calendar_service, event_attendance_service
 from event_formatter import format_event_description_with_attendance, extract_original_description, is_all_day_event
+from auth import create_access_token, create_refresh_token, verify_token, verify_refresh_token, get_google_user_info, TokenData, ACCESS_TOKEN_EXPIRE_MINUTES
+from user_service import user_service
+from refresh_token_service import refresh_token_service
+from session_service import session_service
+from pkce_utils import generate_pkce_pair, generate_state, generate_nonce
 
 # Cargar variables de entorno
 load_dotenv()
+
+# Configuración OAuth
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+GOOGLE_REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/google/callback")
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:3003")
 
 # Escribir credenciales/token desde variables de entorno a /tmp para entornos serverless (Vercel)
 def ensure_google_files_from_env():
@@ -137,7 +151,12 @@ app = FastAPI(
 # Configurar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción, especifica los dominios permitidos
+    allow_origins=[
+        "http://localhost:3000",  # Desarrollo local React
+        "http://localhost:3003",  # Desarrollo local (tu puerto actual)
+        "https://pasesfalsos.cl",  # Dominio de producción
+        "https://www.pasesfalsos.cl"  # Dominio con www
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -708,6 +727,507 @@ async def get_eventos_con_asistencia(
         
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener eventos con asistencia: {str(e)}")
+
+# Función para obtener usuario actual desde sesión
+async def get_current_user_from_session(request: Request) -> Optional[UserModel]:
+    """Obtener usuario actual desde cookie de sesión"""
+    session_token = request.cookies.get("session_token")
+    if not session_token:
+        return None
+    
+    return await session_service.get_session(session_token)
+
+# Rutas de Autenticación
+
+class GoogleAuthRequest(BaseModel):
+    access_token: str
+
+@app.post("/auth/google", response_model=TokenResponse)
+async def google_auth(auth_request: GoogleAuthRequest):
+    """
+    Autenticar usuario con Google OAuth
+    """
+    try:
+        # 1. Obtener información del usuario desde Google
+        google_user_info = await get_google_user_info(auth_request.access_token)
+        
+        # 2. Crear o obtener usuario en la base de datos
+        user = await user_service.get_or_create_user(GoogleUserInfo(**google_user_info))
+        
+        # 3. Crear tokens JWT
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": str(user.id), "email": user.email},
+            expires_delta=access_token_expires
+        )
+        
+        refresh_token = create_refresh_token(
+            data={"sub": str(user.id), "email": user.email}
+        )
+        
+        # 4. Guardar refresh token en la base de datos
+        await refresh_token_service.create_refresh_token(str(user.id), refresh_token)
+        
+        return TokenResponse(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            token_type="bearer",
+            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # En segundos
+            user=user
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Error en autenticación: {str(e)}"
+        )
+
+@app.get("/auth/me", response_model=UserModel)
+async def get_current_user(token_data: TokenData = Depends(verify_token)):
+    """
+    Obtener información del usuario actual
+    """
+    try:
+        user = await user_service.get_user_by_email(token_data.email)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Usuario no encontrado"
+            )
+        return user
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al obtener usuario: {str(e)}"
+        )
+
+@app.post("/auth/refresh", response_model=TokenRefreshResponse)
+async def refresh_token_endpoint(request: TokenRefreshRequest):
+    """
+    Renovar access token usando refresh token
+    """
+    try:
+        # 1. Verificar refresh token
+        payload = verify_refresh_token(request.refresh_token)
+        user_id = payload.get("sub")
+        email = payload.get("email")
+        
+        if not user_id or not email:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token"
+            )
+        
+        # 2. Verificar que el refresh token existe en la base de datos
+        stored_token = await refresh_token_service.get_refresh_token(request.refresh_token)
+        if not stored_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh token not found or expired"
+            )
+        
+        # 3. Crear nuevo access token
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        new_access_token = create_access_token(
+            data={"sub": user_id, "email": email},
+            expires_delta=access_token_expires
+        )
+        
+        return TokenRefreshResponse(
+            access_token=new_access_token,
+            token_type="bearer",
+            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Error renovando token: {str(e)}"
+        )
+
+@app.post("/auth/revoke")
+async def revoke_token(request: TokenRevokeRequest):
+    """
+    Revocar refresh token
+    """
+    try:
+        success = await refresh_token_service.revoke_refresh_token(request.refresh_token)
+        
+        if success:
+            return {"message": "Token revocado exitosamente"}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Token no encontrado"
+            )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error revocando token: {str(e)}"
+        )
+
+@app.post("/auth/check-session")
+async def check_session(request: TokenRefreshRequest):
+    """
+    Verificar si hay una sesión activa usando refresh token
+    """
+    try:
+        # 1. Verificar refresh token
+        payload = verify_refresh_token(request.refresh_token)
+        user_id = payload.get("sub")
+        email = payload.get("email")
+        
+        if not user_id or not email:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid refresh token"
+            )
+        
+        # 2. Verificar que el refresh token existe en la base de datos
+        stored_token = await refresh_token_service.get_refresh_token(request.refresh_token)
+        if not stored_token:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Refresh token not found or expired"
+            )
+        
+        # 3. Obtener usuario
+        user = await user_service.get_user_by_email(email)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+        
+        # 4. Crear nuevo access token
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        new_access_token = create_access_token(
+            data={"sub": user_id, "email": email},
+            expires_delta=access_token_expires
+        )
+        
+        return TokenResponse(
+            access_token=new_access_token,
+            refresh_token=request.refresh_token,  # Mantener el mismo refresh token
+            token_type="bearer",
+            expires_in=ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+            user=user
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Error verificando sesión: {str(e)}"
+        )
+
+@app.get("/auth/session")
+async def get_session(request: Request):
+    """
+    Verificar sesión activa desde cookie
+    """
+    # Verificar conexión a MongoDB
+    try:
+        await mongodb_config.get_database().command("ping")
+    except Exception as e:
+        print(f"Reconectando a MongoDB en /auth/session: {e}")
+        await mongodb_config.connect()
+    
+    user = await get_current_user_from_session(request)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="No hay sesión activa"
+        )
+    
+    return {"user": user}
+
+@app.get("/auth/google/silent")
+async def google_silent_login(email: str = Query(..., description="Email del usuario para silent login")):
+    """
+    Silent login con Google (sin UI)
+    """
+    try:
+        # Generar PKCE parameters
+        code_verifier, code_challenge = generate_pkce_pair()
+        state = generate_state()
+        nonce = generate_nonce()
+        
+        # Guardar PKCE parameters temporalmente (en producción usar Redis)
+        # Por ahora los pasamos en el state
+        pkce_data = {
+            "code_verifier": code_verifier,
+            "email": email
+        }
+        encoded_pkce = base64.urlsafe_b64encode(json.dumps(pkce_data).encode()).decode()
+        
+        # Construir URL de Google OAuth
+        google_auth_url = (
+            "https://accounts.google.com/o/oauth2/v2/auth?"
+            f"client_id={GOOGLE_CLIENT_ID}&"
+            f"redirect_uri={GOOGLE_REDIRECT_URI}&"
+            f"response_type=code&"
+            f"scope=openid email profile&"
+            f"prompt=none&"
+            f"login_hint={email}&"
+            f"state={encoded_pkce}&"
+            f"nonce={nonce}&"
+            f"code_challenge={code_challenge}&"
+            f"code_challenge_method=S256&"
+            f"include_granted_scopes=true"
+        )
+        
+        return RedirectResponse(url=google_auth_url)
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error en silent login: {str(e)}"
+        )
+
+@app.get("/auth/google/login")
+async def google_login(
+    prompt: str = Query(None, description="Prompt type: consent, select_account, none (opcional)"),
+    login_hint: str = Query(None, description="Email del usuario para sugerir cuenta"),
+    request: Request = None
+):
+    """
+    Login normal con Google (con UI)
+    Usa login_hint para mejorar la experiencia del usuario
+    """
+    try:
+        # Log para debugging
+        print(f"=== DEBUG: Parámetros recibidos ===")
+        print(f"prompt inicial: {prompt}")
+        print(f"login_hint: {login_hint}")
+        
+        # Si no se especifica prompt, determinar automáticamente
+        if prompt is None:
+            # Verificar si hay una sesión activa
+            session_token = request.cookies.get("session_token")
+            if session_token:
+                try:
+                    # Verificar si la sesión es válida
+                    session_data = await session_service.get_session(session_token)
+                    if session_data and session_data.get("is_valid", False):
+                        # Usuario ya registrado con sesión válida, usar prompt=none
+                        prompt = "none"
+                        # Obtener email del usuario para login_hint
+                        login_hint = session_data.get("user_email")
+                        print(f"Usuario registrado con sesión válida - usando prompt=none, login_hint={login_hint}")
+                    else:
+                        # Sesión inválida, verificar si el usuario existe en la base de datos
+                        user_email = session_data.get("user_email") if session_data else None
+                        if user_email:
+                            try:
+                                # Verificar si el usuario existe en la base de datos
+                                existing_user = await user_service.get_user_by_email(user_email)
+                                if existing_user:
+                                    prompt = "none"
+                                    login_hint = user_email
+                                    print(f"Usuario encontrado en BD por email {user_email} - usando prompt=none, login_hint={login_hint}")
+                                else:
+                                    prompt = "select_account"
+                                    print(f"Usuario no encontrado en BD por email {user_email} - usando prompt=select_account")
+                            except Exception as e:
+                                prompt = "select_account"
+                                print(f"Error al verificar usuario en BD: {e} - usando prompt=select_account")
+                        else:
+                            prompt = "select_account"
+                            print(f"No hay email en sesión - usando prompt=select_account")
+                except Exception as e:
+                    # Error al verificar sesión, usar select_account
+                    prompt = "select_account"
+                    print(f"Error al verificar sesión: {e} - usando prompt=select_account")
+            else:
+                # No hay sesión, usar select_account
+                prompt = "select_account"
+                print(f"No hay sesión - usando prompt=select_account")
+        
+        print(f"prompt final: {prompt}")
+        print(f"login_hint final: {login_hint}")
+        print(f"================================")
+        
+        # Generar PKCE parameters
+        code_verifier, code_challenge = generate_pkce_pair()
+        state = generate_state()
+        nonce = generate_nonce()
+        
+        # Guardar PKCE parameters temporalmente
+        pkce_data = {
+            "code_verifier": code_verifier,
+            "prompt": prompt
+        }
+        encoded_pkce = base64.urlsafe_b64encode(json.dumps(pkce_data).encode()).decode()
+        
+        # Construir URL de Google OAuth
+        google_auth_url = (
+            "https://accounts.google.com/o/oauth2/v2/auth?"
+            f"client_id={GOOGLE_CLIENT_ID}&"
+            f"redirect_uri={GOOGLE_REDIRECT_URI}&"
+            f"response_type=code&"
+            f"scope=openid email profile&"
+            f"prompt={prompt}&"
+            f"state={encoded_pkce}&"
+            f"nonce={nonce}&"
+            f"code_challenge={code_challenge}&"
+            f"code_challenge_method=S256&"
+            f"include_granted_scopes=true"
+        )
+        
+        # Agregar login_hint si está disponible
+        if login_hint:
+            google_auth_url += f"&login_hint={login_hint}"
+        
+        # Log de la URL generada para debugging
+        print(f"=== DEBUG: URL de Google OAuth ===")
+        print(f"URL completa: {google_auth_url}")
+        print(f"Prompt en URL: {prompt}")
+        print(f"Login hint en URL: {login_hint}")
+        print(f"================================")
+        
+        return RedirectResponse(url=google_auth_url)
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error en login: {str(e)}"
+        )
+
+@app.get("/auth/google/callback")
+async def google_callback(
+    code: str = Query(..., description="Authorization code"),
+    state: str = Query(..., description="State parameter"),
+    error: str = Query(None, description="Error parameter"),
+    request: Request = None
+):
+    """
+    Callback de Google OAuth con PKCE
+    """
+    try:
+        # Verificar si hay error
+        if error:
+            # Redirigir al frontend con error
+            frontend_url = f"{FRONTEND_URL}?login=error&message={error}"
+            return RedirectResponse(url=frontend_url)
+        
+        # Decodificar state para obtener PKCE data
+        try:
+            pkce_data = json.loads(base64.urlsafe_b64decode(state.encode()).decode())
+            code_verifier = pkce_data["code_verifier"]
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid state parameter"
+            )
+        
+        # Intercambiar código por tokens
+        token_data = await exchange_code_for_tokens(code, code_verifier)
+        
+        # Obtener información del usuario
+        user_info = await get_google_user_info(token_data["access_token"])
+        
+        # Verificar conexión a MongoDB antes de crear usuario
+        try:
+            # Intentar reconectar si es necesario
+            await mongodb_config.get_database().command("ping")
+        except Exception as e:
+            print(f"Reconectando a MongoDB: {e}")
+            # Forzar reconexión
+            await mongodb_config.connect()
+        
+        # Crear o obtener usuario
+        user = await user_service.get_or_create_user(GoogleUserInfo(**user_info))
+        
+        # Crear sesión
+        session_token = await session_service.create_session(user)
+        
+        # Redirigir inmediatamente al frontend estableciendo la cookie
+        response = RedirectResponse(url=f"{FRONTEND_URL}?login=success")
+        
+        # Establecer cookie de sesión en la respuesta HTTP
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            max_age=30 * 24 * 60 * 60,  # 30 días
+            httponly=True,
+            secure=False,  # Cambiar a True en producción con HTTPS
+            samesite="lax"
+        )
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        # Redirigir al frontend con error
+        frontend_url = f"{FRONTEND_URL}?login=error&message={str(e)}"
+        return RedirectResponse(url=frontend_url)
+
+async def exchange_code_for_tokens(code: str, code_verifier: str) -> dict:
+    """
+    Intercambiar código de autorización por tokens usando PKCE
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                "https://oauth2.googleapis.com/token",
+                data={
+                    "client_id": GOOGLE_CLIENT_ID,
+                    "client_secret": GOOGLE_CLIENT_SECRET,
+                    "code": code,
+                    "grant_type": "authorization_code",
+                    "redirect_uri": GOOGLE_REDIRECT_URI,
+                    "code_verifier": code_verifier
+                }
+            )
+            
+            if not response.is_success:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Error exchanging code for tokens: {response.text}"
+                )
+            
+            return response.json()
+            
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error exchanging tokens: {str(e)}"
+        )
+
+@app.post("/auth/logout")
+async def logout(request: Request, response: Response):
+    """
+    Cerrar sesión (limpiar cookie y revocar tokens)
+    """
+    try:
+        # Obtener usuario actual
+        user = await get_current_user_from_session(request)
+        
+        if user:
+            # Revocar sesiones del usuario
+            await session_service.revoke_user_sessions(str(user.id))
+            
+            # Revocar refresh tokens del usuario
+            await refresh_token_service.revoke_all_user_tokens(str(user.id))
+        
+        # Limpiar cookie de sesión
+        session_service.clear_session_cookie(response)
+        
+        return {"message": "Sesión cerrada exitosamente"}
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error cerrando sesión: {str(e)}"
+        )
 
 # Función para ejecutar localmente
 if __name__ == "__main__":
