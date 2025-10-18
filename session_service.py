@@ -106,24 +106,30 @@ class SessionService:
         """Establecer cookie de sesión httpOnly"""
         import os
         
+        # Detectar si estamos en desarrollo o producción
+        is_production = os.getenv("ENVIRONMENT", "development") == "production"
+        
         # Determinar el dominio basándose en el entorno
         domain = os.getenv("COOKIE_DOMAIN", ".pasesfalsos.cl")
         
-        # Asegurar que el dominio tenga el punto al inicio para subdominios
-        if domain and not domain.startswith('.'):
+        # En desarrollo, no usar dominio para evitar problemas con localhost
+        if not is_production:
+            domain = None
+        elif domain and not domain.startswith('.'):
             domain = f".{domain}"
         
         print(f"=== DEBUG: Creando cookie con dominio: {domain} ===")
         print(f"=== DEBUG: Nombre de cookie: {self.session_cookie_name} ===")
+        print(f"=== DEBUG: Entorno: {'producción' if is_production else 'desarrollo'} ===")
         
         response.set_cookie(
             key=self.session_cookie_name,
             value=session_token,
             max_age=self.session_expire_days * 24 * 60 * 60,  # En segundos
             httponly=True,
-            secure=True,  # Solo HTTPS en producción
-            samesite="lax",  # Para subdominios
-            domain=domain  # Para subdominios
+            secure=is_production,  # Solo HTTPS en producción
+            samesite="lax",  # Compatible con desarrollo y producción
+            domain=domain  # Solo en producción
         )
         
         print(f"=== DEBUG: Cookie creada exitosamente ===")

@@ -732,10 +732,20 @@ async def get_eventos_con_asistencia(
 async def get_current_user_from_session(request: Request) -> Optional[UserModel]:
     """Obtener usuario actual desde cookie de sesión"""
     session_token = request.cookies.get("session_token")
+    print(f"=== DEBUG: Cookie session_token encontrada: {bool(session_token)} ===")
+    if session_token:
+        print(f"=== DEBUG: Token (primeros 10 chars): {session_token[:10]}... ===")
+    
     if not session_token:
+        print("=== DEBUG: No hay session_token en cookies ===")
         return None
     
-    return await session_service.get_session(session_token)
+    user = await session_service.get_session(session_token)
+    print(f"=== DEBUG: Usuario encontrado desde sesión: {bool(user)} ===")
+    if user:
+        print(f"=== DEBUG: Usuario email: {user.email} ===")
+    
+    return user
 
 # Rutas de Autenticación
 
@@ -932,6 +942,8 @@ async def get_session(request: Request):
     """
     Verificar sesión activa desde cookie
     """
+    print(f"=== DEBUG: Todas las cookies recibidas: {dict(request.cookies)} ===")
+    
     # Verificar conexión a MongoDB
     try:
         await mongodb_config.get_database().command("ping")
@@ -1110,6 +1122,11 @@ async def google_callback(
     """
     Callback de Google OAuth con PKCE
     """
+    print(f"=== DEBUG: Callback de Google ejecutado ===")
+    print(f"=== DEBUG: Code presente: {bool(code)} ===")
+    print(f"=== DEBUG: State presente: {bool(state)} ===")
+    print(f"=== DEBUG: Error: {error} ===")
+    
     try:
         # Verificar si hay error
         if error:
@@ -1147,19 +1164,15 @@ async def google_callback(
         
         # Crear sesión
         session_token = await session_service.create_session(user)
+        print(f"=== DEBUG: Sesión creada, token: {session_token[:10]}... ===")
         
         # Redirigir inmediatamente al frontend estableciendo la cookie
         response = RedirectResponse(url=f"{FRONTEND_URL}?login=success")
+        print(f"=== DEBUG: Redirigiendo a: {FRONTEND_URL}?login=success ===")
         
-        # Establecer cookie de sesión en la respuesta HTTP
-        response.set_cookie(
-            key="session_token",
-            value=session_token,
-            max_age=30 * 24 * 60 * 60,  # 30 días
-            httponly=True,
-            secure=False,  # Cambiar a True en producción con HTTPS
-            samesite="lax"
-        )
+        # Establecer cookie de sesión usando el session_service
+        session_service.set_session_cookie(response, session_token)
+        print(f"=== DEBUG: Cookie establecida en respuesta ===")
         
         return response
         
