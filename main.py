@@ -335,7 +335,7 @@ async def debug_auth(request: Request):
                 debug_info["debug_steps"].append("Token extraído del header")
                 print(f"=== DEBUG: Verificando token: {token[:20]}... ===")
                 
-                token_data = verify_token(token)
+                token_data = verify_token_string(token)
                 debug_info["debug_steps"].append(f"Token verificado: {token_data}")
                 print(f"=== DEBUG: Token data: {token_data} ===")
                 
