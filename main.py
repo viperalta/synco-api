@@ -148,31 +148,6 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Middleware para manejar conexiones de MongoDB
-@app.middleware("http")
-async def mongodb_middleware(request: Request, call_next):
-    """Middleware para manejar conexiones de MongoDB en cada request"""
-    try:
-        # Conectar a MongoDB si no está conectado
-        if mongodb_config.database is None:
-            # MongoDB se conecta automáticamente via middleware
-        
-        # Procesar el request
-        response = await call_next(request)
-        return response
-    
-    except Exception as e:
-        print(f"Error en middleware MongoDB: {e}")
-        # En caso de error, intentar reconectar
-        try:
-            await mongodb_config.disconnect()
-            # MongoDB se conecta automáticamente via middleware
-            response = await call_next(request)
-            return response
-        except Exception as reconnect_error:
-            print(f"Error al reconectar MongoDB: {reconnect_error}")
-            raise HTTPException(status_code=500, detail="Error de conexión a la base de datos")
-
 # Configurar CORS
 app.add_middleware(
     CORSMiddleware,
@@ -630,7 +605,7 @@ async def debug_mongodb():
     try:
         # Intentar conectar si no está conectado
         if mongodb_config.database is None:
-            # MongoDB se conecta automáticamente via middleware
+            await mongodb_config.connect()
         
         # Probar una operación simple
         collection = mongodb_config.get_collection("debug_test")
@@ -1305,7 +1280,7 @@ async def get_session(request: Request):
         await mongodb_config.get_database().command("ping")
     except Exception as e:
         print(f"Reconectando a MongoDB en /auth/session: {e}")
-        # MongoDB se conecta automáticamente via middleware
+        await mongodb_config.connect()
     
     user = await get_current_user_from_session(request)
     if not user:
@@ -1525,7 +1500,7 @@ async def google_callback(
         except Exception as e:
             print(f"Reconectando a MongoDB: {e}")
             # Forzar reconexión
-            # MongoDB se conecta automáticamente via middleware
+            await mongodb_config.connect()
         
         # Crear o obtener usuario
         user = await user_service.get_or_create_user(GoogleUserInfo(**user_info))
