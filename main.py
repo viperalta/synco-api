@@ -296,6 +296,15 @@ async def debug_google_calendar_permissions():
             "scopes": google_calendar_service.scopes if google_calendar_service else None
         }
 
+@app.get("/debug/version")
+async def debug_version():
+    """Endpoint para verificar la versión del código desplegado"""
+    return {
+        "version": "v2.1.0",
+        "fix_applied": "verify_token_string function added",
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
 @app.get("/debug/auth")
 async def debug_auth(request: Request):
     """Endpoint de debug para verificar autenticación"""
