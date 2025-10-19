@@ -309,9 +309,9 @@ async def debug_version():
 async def debug_users():
     """Endpoint para verificar usuarios en la base de datos"""
     try:
-        users = await user_service.get_all_users(limit=10, offset=0)
+        users, total = await user_service.get_all_users(skip=0, limit=10)
         return {
-            "total_users": len(users),
+            "total_users": total,
             "users": [
                 {
                     "id": str(user.id),
