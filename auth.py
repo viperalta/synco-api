@@ -64,29 +64,37 @@ def verify_refresh_token(token: str):
             detail="Invalid refresh token"
         )
 
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
-    """Verificar token JWT de acceso"""
-    credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
-    
+def verify_token_string(token: str) -> TokenData:
+    """Verificar token JWT de acceso desde string"""
     try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         token_type = payload.get("type")
         if token_type != "access":
-            raise credentials_exception
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
         
         user_id: str = payload.get("sub")
         email: str = payload.get("email")
         if user_id is None or email is None:
-            raise credentials_exception
-        token_data = TokenData(user_id=user_id, email=email)
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token payload",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        return TokenData(user_id=user_id, email=email)
     except JWTError:
-        raise credentials_exception
-    
-    return token_data
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verificar token JWT de acceso (para dependencias de FastAPI)"""
+    return verify_token_string(credentials.credentials)
 
 async def get_google_user_info(access_token: str) -> dict:
     """Obtener información del usuario desde Google usando el access token"""

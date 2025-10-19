@@ -16,7 +16,7 @@ from mongodb_config import mongodb_config
 from models import ItemModel, ItemCreate, ItemUpdate, AttendanceRequest, AttendanceResponse, EventAttendanceModel, UserModel, TokenResponse, GoogleUserInfo, TokenRefreshRequest, TokenRefreshResponse, TokenRevokeRequest, UserUpdateRequest, UserListResponse, UserRoleUpdateRequest, UserNicknameUpdateRequest, EventCreateRequest, EventUpdateRequest, EventDeleteResponse
 from database_services import item_service, calendar_event_service, calendar_service, event_attendance_service
 from event_formatter import format_event_description_with_attendance, extract_original_description, is_all_day_event
-from auth import create_access_token, create_refresh_token, verify_token, verify_refresh_token, get_google_user_info, TokenData, ACCESS_TOKEN_EXPIRE_MINUTES
+from auth import create_access_token, create_refresh_token, verify_token, verify_token_string, verify_refresh_token, get_google_user_info, TokenData, ACCESS_TOKEN_EXPIRE_MINUTES
 from user_service import user_service
 from refresh_token_service import refresh_token_service
 from session_service import session_service
@@ -814,7 +814,7 @@ async def get_current_user_from_request(request: Request) -> Optional[UserModel]
         try:
             token = auth_header.split(" ")[1]
             print(f"=== DEBUG: Verificando token: {token[:20]}... ===")
-            token_data = verify_token(token)
+            token_data = verify_token_string(token)
             print(f"=== DEBUG: Token data: {token_data} ===")
             user = await user_service.get_user_by_email(token_data.email)
             print(f"=== DEBUG: Usuario encontrado: {bool(user)} ===")
