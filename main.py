@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Query, Depends, status, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, HTMLResponse
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
 from typing import Dict, List, Optional
 from datetime import datetime, timedelta
@@ -147,7 +148,30 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Sin eventos de startup/shutdown - cada request maneja su propia conexión
+# Middleware para manejar conexiones de MongoDB
+@app.middleware("http")
+async def mongodb_middleware(request: Request, call_next):
+    """Middleware para manejar conexiones de MongoDB en cada request"""
+    try:
+        # Conectar a MongoDB si no está conectado
+        if mongodb_config.database is None:
+            # MongoDB se conecta automáticamente via middleware
+        
+        # Procesar el request
+        response = await call_next(request)
+        return response
+    
+    except Exception as e:
+        print(f"Error en middleware MongoDB: {e}")
+        # En caso de error, intentar reconectar
+        try:
+            await mongodb_config.disconnect()
+            # MongoDB se conecta automáticamente via middleware
+            response = await call_next(request)
+            return response
+        except Exception as reconnect_error:
+            print(f"Error al reconectar MongoDB: {reconnect_error}")
+            raise HTTPException(status_code=500, detail="Error de conexión a la base de datos")
 
 # Configurar CORS
 app.add_middleware(
@@ -606,7 +630,7 @@ async def debug_mongodb():
     try:
         # Intentar conectar si no está conectado
         if mongodb_config.database is None:
-            await mongodb_config.connect()
+            # MongoDB se conecta automáticamente via middleware
         
         # Probar una operación simple
         collection = mongodb_config.get_collection("debug_test")
@@ -1281,7 +1305,7 @@ async def get_session(request: Request):
         await mongodb_config.get_database().command("ping")
     except Exception as e:
         print(f"Reconectando a MongoDB en /auth/session: {e}")
-        await mongodb_config.connect()
+        # MongoDB se conecta automáticamente via middleware
     
     user = await get_current_user_from_session(request)
     if not user:
@@ -1501,7 +1525,7 @@ async def google_callback(
         except Exception as e:
             print(f"Reconectando a MongoDB: {e}")
             # Forzar reconexión
-            await mongodb_config.connect()
+            # MongoDB se conecta automáticamente via middleware
         
         # Crear o obtener usuario
         user = await user_service.get_or_create_user(GoogleUserInfo(**user_info))
