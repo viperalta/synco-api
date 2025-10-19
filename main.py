@@ -296,6 +296,35 @@ async def debug_google_calendar_permissions():
             "scopes": google_calendar_service.scopes if google_calendar_service else None
         }
 
+@app.get("/debug/auth")
+async def debug_auth(request: Request):
+    """Endpoint de debug para verificar autenticación"""
+    try:
+        # Debug: Mostrar headers
+        print(f"=== DEBUG AUTH: Headers ===")
+        print(f"Authorization header: {request.headers.get('authorization')}")
+        print(f"Cookies: {dict(request.cookies)}")
+        
+        # Intentar obtener usuario
+        user = await get_current_user_from_request(request)
+        
+        return {
+            "auth_header_present": bool(request.headers.get('authorization')),
+            "auth_header_value": request.headers.get('authorization', '')[:50] + "..." if request.headers.get('authorization') else None,
+            "session_token_present": bool(request.cookies.get('session_token')),
+            "user_found": bool(user),
+            "user_id": str(user.id) if user else None,
+            "user_email": user.email if user else None,
+            "user_roles": user.roles if user else None,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
 @app.get("/debug/mongodb")
 async def debug_mongodb():
     """Endpoint de debug específico para MongoDB"""
@@ -740,12 +769,18 @@ async def get_current_user_from_request(request: Request) -> Optional[UserModel]
     if auth_header and auth_header.startswith("Bearer "):
         try:
             token = auth_header.split(" ")[1]
+            print(f"=== DEBUG: Verificando token: {token[:20]}... ===")
             token_data = verify_token(token)
+            print(f"=== DEBUG: Token data: {token_data} ===")
             user = await user_service.get_user_by_email(token_data.email)
+            print(f"=== DEBUG: Usuario encontrado: {bool(user)} ===")
             if user:
                 return user
         except Exception as e:
-            print(f"Error verificando token: {e}")
+            print(f"=== DEBUG: Error verificando token: {e} ===")
+            print(f"=== DEBUG: Error type: {type(e).__name__} ===")
+            import traceback
+            print(f"=== DEBUG: Traceback: {traceback.format_exc()} ===")
     
     # Si no se pudo obtener desde header, intentar desde sesión
     return await get_current_user_from_session(request)
