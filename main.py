@@ -305,6 +305,65 @@ async def debug_version():
         "timestamp": datetime.utcnow().isoformat()
     }
 
+@app.get("/debug/users")
+async def debug_users():
+    """Endpoint para verificar usuarios en la base de datos"""
+    try:
+        users = await user_service.get_all_users(limit=10, offset=0)
+        return {
+            "total_users": len(users),
+            "users": [
+                {
+                    "id": str(user.id),
+                    "email": user.email,
+                    "name": user.name,
+                    "nickname": user.nickname,
+                    "roles": user.roles,
+                    "is_active": user.is_active
+                }
+                for user in users
+            ],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+@app.get("/debug/user-by-email/{email}")
+async def debug_user_by_email(email: str):
+    """Endpoint para verificar un usuario específico por email"""
+    try:
+        user = await user_service.get_user_by_email(email)
+        if user:
+            return {
+                "found": True,
+                "user": {
+                    "id": str(user.id),
+                    "email": user.email,
+                    "name": user.name,
+                    "nickname": user.nickname,
+                    "roles": user.roles,
+                    "is_active": user.is_active
+                },
+                "timestamp": datetime.utcnow().isoformat()
+            }
+        else:
+            return {
+                "found": False,
+                "email": email,
+                "timestamp": datetime.utcnow().isoformat()
+            }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "email": email,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
 @app.get("/debug/auth")
 async def debug_auth(request: Request):
     """Endpoint de debug para verificar autenticación"""
