@@ -364,6 +364,87 @@ async def debug_user_by_email(email: str):
             "timestamp": datetime.utcnow().isoformat()
         }
 
+@app.get("/debug/search-users/{pattern}")
+async def search_users_by_pattern(pattern: str):
+    """Endpoint para buscar usuarios por patrón de email"""
+    try:
+        collection = await user_service.get_collection()
+        
+        # Buscar usuarios que contengan el patrón en el email
+        cursor = collection.find({"email": {"$regex": pattern, "$options": "i"}})
+        users = []
+        async for user_data in cursor:
+            users.append({
+                "id": str(user_data["_id"]),
+                "email": user_data["email"],
+                "name": user_data["name"],
+                "nickname": user_data.get("nickname", ""),
+                "roles": user_data.get("roles", []),
+                "is_active": user_data.get("is_active", True)
+            })
+        
+        return {
+            "pattern": pattern,
+            "found_users": len(users),
+            "users": users,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "pattern": pattern,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
+@app.post("/debug/create-admin-user")
+async def create_admin_user():
+    """Endpoint temporal para crear usuario admin en producción"""
+    try:
+        # Crear usuario admin temporal
+        admin_user_data = {
+            "google_id": "112261103155052519636",
+            "email": "viperalta@gmail.com",
+            "name": "Vicente Peralta",
+            "picture": "https://lh3.googleusercontent.com/a/ACg8ocKR5Dm7USLb5yJwiyzNJg1qYvuZbP...",
+            "nickname": "",
+            "roles": ["admin"],
+            "is_active": True
+        }
+        
+        # Crear usuario usando el servicio
+        from models import GoogleUserInfo
+        google_user_info = GoogleUserInfo(
+            id=admin_user_data["google_id"],
+            email=admin_user_data["email"],
+            name=admin_user_data["name"],
+            picture=admin_user_data["picture"]
+        )
+        
+        user = await user_service.create_user(google_user_info)
+        
+        # Actualizar roles
+        await user_service.update_user_roles(str(user.id), ["admin"])
+        
+        return {
+            "success": True,
+            "user": {
+                "id": str(user.id),
+                "email": user.email,
+                "name": user.name,
+                "nickname": user.nickname,
+                "roles": user.roles,
+                "is_active": user.is_active
+            },
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
 @app.get("/debug/auth")
 async def debug_auth(request: Request):
     """Endpoint de debug para verificar autenticación"""
