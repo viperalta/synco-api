@@ -397,6 +397,45 @@ async def search_users_by_pattern(pattern: str):
             "timestamp": datetime.utcnow().isoformat()
         }
 
+@app.get("/debug/mongodb-direct")
+async def debug_mongodb_direct():
+    """Endpoint para acceder directamente a MongoDB y verificar usuarios"""
+    try:
+        collection = await user_service.get_collection()
+        
+        # Contar documentos
+        total_count = await collection.count_documents({})
+        
+        # Obtener todos los documentos
+        cursor = collection.find({})
+        all_docs = []
+        async for doc in cursor:
+            all_docs.append({
+                "_id": str(doc["_id"]),
+                "email": doc.get("email", "NO_EMAIL"),
+                "name": doc.get("name", "NO_NAME"),
+                "google_id": doc.get("google_id", "NO_GOOGLE_ID"),
+                "nickname": doc.get("nickname", ""),
+                "roles": doc.get("roles", []),
+                "is_active": doc.get("is_active", True),
+                "created_at": doc.get("created_at", "NO_DATE"),
+                "updated_at": doc.get("updated_at", "NO_DATE")
+            })
+        
+        return {
+            "total_documents": total_count,
+            "documents": all_docs,
+            "collection_name": collection.name,
+            "database_name": collection.database.name,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
 @app.post("/debug/create-admin-user")
 async def create_admin_user():
     """Endpoint temporal para crear usuario admin en producción"""
