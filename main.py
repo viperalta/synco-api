@@ -436,6 +436,49 @@ async def debug_mongodb_direct():
             "timestamp": datetime.utcnow().isoformat()
         }
 
+@app.get("/debug/mongodb-config")
+async def debug_mongodb_config():
+    """Endpoint para verificar la configuración de MongoDB"""
+    try:
+        from mongodb_config import mongodb_config
+        
+        # Obtener información de la configuración
+        config_info = {
+            "mongodb_uri": os.getenv("MONGODB_URI", "NOT_SET"),
+            "database_name": os.getenv("MONGODB_DATABASE", "NOT_SET"),
+            "collection_names": {
+                "users": "users",
+                "items": "items", 
+                "calendar_events": "calendar_events",
+                "calendars": "calendars"
+            }
+        }
+        
+        # Intentar obtener la colección de usuarios
+        try:
+            users_collection = mongodb_config.get_collection("users")
+            config_info["users_collection"] = {
+                "name": users_collection.name,
+                "database": users_collection.database.name,
+                "accessible": True
+            }
+        except Exception as e:
+            config_info["users_collection"] = {
+                "error": str(e),
+                "accessible": False
+            }
+        
+        return {
+            "config": config_info,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        return {
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+
 @app.post("/debug/create-admin-user")
 async def create_admin_user():
     """Endpoint temporal para crear usuario admin en producción"""

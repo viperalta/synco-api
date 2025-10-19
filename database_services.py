@@ -6,6 +6,7 @@ from datetime import datetime
 from bson import ObjectId
 from dotenv import load_dotenv
 from models import ItemModel, ItemCreate, ItemUpdate, CalendarEventModel, CalendarModel, EventAttendanceModel, AttendanceRequest, AttendanceResponse
+from mongodb_config import mongodb_config
 import logging
 import os
 import asyncio
