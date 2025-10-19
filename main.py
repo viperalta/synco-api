@@ -731,6 +731,25 @@ async def get_eventos_con_asistencia(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener eventos con asistencia: {str(e)}")
 
+# Función para obtener usuario actual desde sesión o Authorization header
+async def get_current_user_from_request(request: Request) -> Optional[UserModel]:
+    """Obtener usuario desde Authorization header o cookie de sesión"""
+    # Intentar obtener usuario desde Authorization header primero
+    auth_header = request.headers.get("authorization")
+    
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            token = auth_header.split(" ")[1]
+            token_data = verify_token(token)
+            user = await user_service.get_user_by_email(token_data.email)
+            if user:
+                return user
+        except Exception as e:
+            print(f"Error verificando token: {e}")
+    
+    # Si no se pudo obtener desde header, intentar desde sesión
+    return await get_current_user_from_session(request)
+
 # Función para obtener usuario actual desde sesión
 async def get_current_user_from_session(request: Request) -> Optional[UserModel]:
     """Obtener usuario actual desde cookie de sesión"""
@@ -1275,8 +1294,9 @@ async def get_all_users_admin(
     - **limit**: Número máximo de usuarios a retornar
     """
     try:
-        # Obtener usuario desde sesión o token
-        user = await get_current_user_from_session(request)
+        # Obtener usuario desde Authorization header o sesión
+        user = await get_current_user_from_request(request)
+        
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1314,8 +1334,8 @@ async def get_user_admin(
     - **user_id**: ID del usuario a consultar
     """
     try:
-        # Obtener usuario desde sesión o token
-        user = await get_current_user_from_session(request)
+        # Obtener usuario desde Authorization header o sesión
+        user = await get_current_user_from_request(request)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1355,8 +1375,8 @@ async def update_user_admin(
     - **update_request**: Datos a actualizar (nickname, roles, is_active)
     """
     try:
-        # Obtener usuario desde sesión o token
-        user = await get_current_user_from_session(request)
+        # Obtener usuario desde Authorization header o sesión
+        user = await get_current_user_from_request(request)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1422,8 +1442,8 @@ async def update_user_roles_admin(
     - **role_request**: Lista de roles a asignar
     """
     try:
-        # Obtener usuario desde sesión o token
-        user = await get_current_user_from_session(request)
+        # Obtener usuario desde Authorization header o sesión
+        user = await get_current_user_from_request(request)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1471,8 +1491,8 @@ async def update_user_nickname_admin(
     - **nickname_request**: Nuevo nickname
     """
     try:
-        # Obtener usuario desde sesión o token
-        user = await get_current_user_from_session(request)
+        # Obtener usuario desde Authorization header o sesión
+        user = await get_current_user_from_request(request)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -1506,8 +1526,8 @@ async def get_available_roles(request: Request = None):
     Obtener lista de roles disponibles (solo administradores)
     """
     try:
-        # Obtener usuario desde sesión o token
-        user = await get_current_user_from_session(request)
+        # Obtener usuario desde Authorization header o sesión
+        user = await get_current_user_from_request(request)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
