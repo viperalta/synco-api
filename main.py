@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 from dotenv import load_dotenv
 from google_calendar_service import GoogleCalendarService
 from mongodb_config import mongodb_config
-from models import ItemModel, ItemCreate, ItemUpdate, AttendanceRequest, AttendanceResponse, EventAttendanceModel, UserModel, TokenResponse, GoogleUserInfo, TokenRefreshRequest, TokenRefreshResponse, TokenRevokeRequest
+from models import ItemModel, ItemCreate, ItemUpdate, AttendanceRequest, AttendanceResponse, EventAttendanceModel, UserModel, TokenResponse, GoogleUserInfo, TokenRefreshRequest, TokenRefreshResponse, TokenRevokeRequest, UserUpdateRequest, UserListResponse, UserRoleUpdateRequest, UserNicknameUpdateRequest, EventCreateRequest, EventUpdateRequest, EventDeleteResponse
 from database_services import item_service, calendar_event_service, calendar_service, event_attendance_service
 from event_formatter import format_event_description_with_attendance, extract_original_description, is_all_day_event
 from auth import create_access_token, create_refresh_token, verify_token, verify_refresh_token, get_google_user_info, TokenData, ACCESS_TOKEN_EXPIRE_MINUTES
@@ -21,6 +21,7 @@ from user_service import user_service
 from refresh_token_service import refresh_token_service
 from session_service import session_service
 from pkce_utils import generate_pkce_pair, generate_state, generate_nonce
+from permissions import permission_checker
 
 # Cargar variables de entorno
 load_dotenv()
@@ -192,6 +193,8 @@ class EventResponse(BaseModel):
     htmlLink: str
     created: str
     updated: str
+    attendees: Optional[List[str]] = []  # Lista de asistentes (opcional)
+    non_attendees: Optional[List[str]] = []  # Lista de no asistentes (opcional)
 
 class CalendarResponse(BaseModel):
     id: str
@@ -958,7 +961,19 @@ async def get_session(request: Request):
             detail="No hay sesión activa"
         )
     
-    return {"user": user}
+    # Crear access token para el usuario
+    access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    access_token = create_access_token(
+        data={"sub": str(user.id), "email": user.email},
+        expires_delta=access_token_expires
+    )
+    
+    return {
+        "user": user,
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60
+    }
 
 @app.get("/auth/google/silent")
 async def google_silent_login(email: str = Query(..., description="Email del usuario para silent login")):
@@ -1243,6 +1258,668 @@ async def logout(request: Request, response: Response):
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error cerrando sesión: {str(e)}"
+        )
+
+# Rutas de Administración de Usuarios
+
+@app.get("/admin/users", response_model=UserListResponse)
+async def get_all_users_admin(
+    skip: int = Query(default=0, ge=0),
+    limit: int = Query(default=100, ge=1, le=1000),
+    request: Request = None
+):
+    """
+    Obtener lista de todos los usuarios (solo administradores)
+    
+    - **skip**: Número de usuarios a saltar
+    - **limit**: Número máximo de usuarios a retornar
+    """
+    try:
+        # Obtener usuario desde sesión o token
+        user = await get_current_user_from_session(request)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No hay sesión activa"
+            )
+        
+        # Verificar permisos de administrador
+        await permission_checker.require_admin(str(user.id))
+        
+        users, total = await user_service.get_all_users(skip=skip, limit=limit)
+        
+        return UserListResponse(
+            users=users,
+            total=total,
+            skip=skip,
+            limit=limit
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al obtener usuarios: {str(e)}"
+        )
+
+@app.get("/admin/users/{user_id}", response_model=UserModel)
+async def get_user_admin(
+    user_id: str,
+    request: Request = None
+):
+    """
+    Obtener información detallada de un usuario específico (solo administradores)
+    
+    - **user_id**: ID del usuario a consultar
+    """
+    try:
+        # Obtener usuario desde sesión o token
+        user = await get_current_user_from_session(request)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No hay sesión activa"
+            )
+        
+        # Verificar permisos de administrador
+        await permission_checker.require_admin(str(user.id))
+        
+        target_user = await user_service.get_user_by_id(user_id)
+        if not target_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Usuario no encontrado"
+            )
+        
+        return target_user
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al obtener usuario: {str(e)}"
+        )
+
+@app.put("/admin/users/{user_id}", response_model=UserModel)
+async def update_user_admin(
+    user_id: str,
+    update_request: UserUpdateRequest,
+    request: Request = None
+):
+    """
+    Actualizar información de un usuario (solo administradores)
+    
+    - **user_id**: ID del usuario a actualizar
+    - **update_request**: Datos a actualizar (nickname, roles, is_active)
+    """
+    try:
+        # Obtener usuario desde sesión o token
+        user = await get_current_user_from_session(request)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No hay sesión activa"
+            )
+        
+        # Verificar permisos de administrador
+        await permission_checker.require_admin(str(user.id))
+        
+        # Verificar que el usuario existe
+        existing_user = await user_service.get_user_by_id(user_id)
+        if not existing_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Usuario no encontrado"
+            )
+        
+        # Validar roles si se están actualizando
+        if update_request.roles is not None:
+            if not permission_checker.validate_roles(update_request.roles):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Uno o más roles no son válidos"
+                )
+        
+        # Preparar datos de actualización
+        update_data = {}
+        if update_request.nickname is not None:
+            update_data["nickname"] = update_request.nickname
+        if update_request.roles is not None:
+            update_data["roles"] = update_request.roles
+        if update_request.is_active is not None:
+            update_data["is_active"] = update_request.is_active
+        
+        # Actualizar usuario
+        updated_user = await user_service.update_user(user_id, update_data)
+        if not updated_user:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Error al actualizar usuario"
+            )
+        
+        return updated_user
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al actualizar usuario: {str(e)}"
+        )
+
+@app.put("/admin/users/{user_id}/roles", response_model=UserModel)
+async def update_user_roles_admin(
+    user_id: str,
+    role_request: UserRoleUpdateRequest,
+    request: Request = None
+):
+    """
+    Actualizar roles de un usuario (solo administradores)
+    
+    - **user_id**: ID del usuario
+    - **role_request**: Lista de roles a asignar
+    """
+    try:
+        # Obtener usuario desde sesión o token
+        user = await get_current_user_from_session(request)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No hay sesión activa"
+            )
+        
+        # Verificar permisos de administrador
+        await permission_checker.require_admin(str(user.id))
+        
+        # Validar roles
+        if not permission_checker.validate_roles(role_request.roles):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Uno o más roles no son válidos"
+            )
+        
+        # Actualizar roles
+        updated_user = await user_service.update_user_roles(user_id, role_request.roles)
+        if not updated_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Usuario no encontrado"
+            )
+        
+        return updated_user
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al actualizar roles: {str(e)}"
+        )
+
+@app.put("/admin/users/{user_id}/nickname", response_model=UserModel)
+async def update_user_nickname_admin(
+    user_id: str,
+    nickname_request: UserNicknameUpdateRequest,
+    request: Request = None
+):
+    """
+    Actualizar nickname de un usuario (solo administradores)
+    
+    - **user_id**: ID del usuario
+    - **nickname_request**: Nuevo nickname
+    """
+    try:
+        # Obtener usuario desde sesión o token
+        user = await get_current_user_from_session(request)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No hay sesión activa"
+            )
+        
+        # Verificar permisos de administrador
+        await permission_checker.require_admin(str(user.id))
+        
+        # Actualizar nickname
+        updated_user = await user_service.update_user_nickname(user_id, nickname_request.nickname)
+        if not updated_user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Usuario no encontrado"
+            )
+        
+        return updated_user
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al actualizar nickname: {str(e)}"
+        )
+
+@app.get("/admin/roles")
+async def get_available_roles(request: Request = None):
+    """
+    Obtener lista de roles disponibles (solo administradores)
+    """
+    try:
+        # Obtener usuario desde sesión o token
+        user = await get_current_user_from_session(request)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No hay sesión activa"
+            )
+        
+        # Verificar permisos de administrador
+        await permission_checker.require_admin(str(user.id))
+        
+        roles = permission_checker.get_available_roles()
+        role_permissions = {}
+        
+        for role in roles:
+            role_permissions[role] = permission_checker.get_role_permissions(role)
+        
+        # Agregar permisos de visitors
+        role_permissions["visitor"] = permission_checker.get_visitor_permissions()
+        
+        return {
+            "roles": roles + ["visitor"],  # Incluir visitor en la lista
+            "permissions": role_permissions
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al obtener roles: {str(e)}"
+        )
+
+@app.get("/admin/permissions/{user_id}")
+async def get_user_permissions(
+    user_id: str,
+    token_data: TokenData = Depends(verify_token)
+):
+    """
+    Obtener permisos de un usuario específico (solo administradores)
+    
+    - **user_id**: ID del usuario
+    """
+    try:
+        # Verificar permisos de administrador
+        await permission_checker.require_admin(str(token_data.user_id))
+        
+        user = await user_service.get_user_by_id(user_id)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Usuario no encontrado"
+            )
+        
+        # Obtener todos los permisos del usuario
+        user_permissions = set()
+        for role in user.roles:
+            role_perms = permission_checker.get_role_permissions(role)
+            user_permissions.update(role_perms)
+        
+        return {
+            "user_id": user_id,
+            "user_email": user.email,
+            "user_nickname": user.nickname,
+            "roles": user.roles,
+            "permissions": sorted(list(user_permissions)),
+            "is_active": user.is_active
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al obtener permisos: {str(e)}"
+        )
+
+# Rutas de Gestión de Eventos
+
+@app.post("/eventos", response_model=EventResponse)
+async def create_evento(
+    event_request: EventCreateRequest,
+    token_data: TokenData = Depends(verify_token)
+):
+    """
+    Crear un nuevo evento en Google Calendar
+    
+    - **event_request**: Datos del evento a crear
+    """
+    try:
+        # Verificar permisos para crear eventos
+        await permission_checker.require_permission(str(token_data.user_id), "events.create")
+        
+        if not google_calendar_service:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Servicio de Google Calendar no disponible"
+            )
+        
+        # Preparar datos del evento para Google Calendar
+        event_data = {
+            'summary': event_request.summary,
+            'description': event_request.description or '',
+            'location': event_request.location or '',
+            'start': {
+                'dateTime': event_request.start_datetime,
+                'timeZone': 'America/Santiago'
+            },
+            'end': {
+                'dateTime': event_request.end_datetime,
+                'timeZone': 'America/Santiago'
+            }
+        }
+        
+        # Crear evento en Google Calendar
+        created_event = google_calendar_service.create_event(
+            event_request.calendar_id, 
+            event_data
+        )
+        
+        return EventResponse(
+            id=created_event['id'],
+            summary=created_event['summary'],
+            description=created_event.get('description', ''),
+            start=created_event['start'],
+            end=created_event['end'],
+            location=created_event.get('location', ''),
+            status=created_event['status'],
+            htmlLink=created_event['htmlLink'],
+            created=created_event['created'],
+            updated=created_event['updated'],
+            attendees=[],  # Nuevo evento sin asistentes
+            non_attendees=[]  # Nuevo evento sin no asistentes
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al crear evento: {str(e)}"
+        )
+
+@app.put("/eventos/{event_id}", response_model=EventResponse)
+async def update_evento(
+    event_id: str,
+    event_request: EventUpdateRequest,
+    calendar_id: str = Query(default="primary"),
+    token_data: TokenData = Depends(verify_token)
+):
+    """
+    Actualizar un evento existente en Google Calendar
+    
+    - **event_id**: ID del evento a actualizar
+    - **event_request**: Datos a actualizar
+    - **calendar_id**: ID del calendario (por defecto "primary")
+    """
+    try:
+        # Verificar permisos para editar eventos
+        await permission_checker.require_permission(str(token_data.user_id), "events.edit")
+        
+        if not google_calendar_service:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Servicio de Google Calendar no disponible"
+            )
+        
+        # Obtener evento actual
+        current_event = google_calendar_service.get_event(calendar_id, event_id)
+        if not current_event:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Evento no encontrado"
+            )
+        
+        # Preparar datos de actualización
+        update_data = {}
+        if event_request.summary is not None:
+            update_data['summary'] = event_request.summary
+        if event_request.description is not None:
+            update_data['description'] = event_request.description
+        if event_request.location is not None:
+            update_data['location'] = event_request.location
+        if event_request.start_datetime is not None:
+            update_data['start'] = {
+                'dateTime': event_request.start_datetime,
+                'timeZone': 'America/Santiago'
+            }
+        if event_request.end_datetime is not None:
+            update_data['end'] = {
+                'dateTime': event_request.end_datetime,
+                'timeZone': 'America/Santiago'
+            }
+        
+        # Actualizar evento en Google Calendar
+        updated_event = google_calendar_service.update_event(calendar_id, event_id, update_data)
+        
+        return EventResponse(
+            id=updated_event['id'],
+            summary=updated_event['summary'],
+            description=updated_event.get('description', ''),
+            start=updated_event['start'],
+            end=updated_event['end'],
+            location=updated_event.get('location', ''),
+            status=updated_event['status'],
+            htmlLink=updated_event['htmlLink'],
+            created=updated_event['created'],
+            updated=updated_event['updated'],
+            attendees=[],  # Por defecto vacío, se puede poblar después
+            non_attendees=[]  # Por defecto vacío, se puede poblar después
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al actualizar evento: {str(e)}"
+        )
+
+@app.delete("/eventos/{event_id}", response_model=EventDeleteResponse)
+async def delete_evento(
+    event_id: str,
+    calendar_id: str = Query(default="primary"),
+    token_data: TokenData = Depends(verify_token)
+):
+    """
+    Eliminar un evento de Google Calendar
+    
+    - **event_id**: ID del evento a eliminar
+    - **calendar_id**: ID del calendario (por defecto "primary")
+    """
+    try:
+        # Verificar permisos para eliminar eventos
+        await permission_checker.require_permission(str(token_data.user_id), "events.delete")
+        
+        if not google_calendar_service:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Servicio de Google Calendar no disponible"
+            )
+        
+        # Verificar que el evento existe
+        current_event = google_calendar_service.get_event(calendar_id, event_id)
+        if not current_event:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Evento no encontrado"
+            )
+        
+        # Eliminar evento de Google Calendar
+        google_calendar_service.delete_event(calendar_id, event_id)
+        
+        return EventDeleteResponse(
+            message=f"Evento '{current_event.get('summary', 'Sin título')}' eliminado exitosamente",
+            event_id=event_id,
+            deleted=True
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al eliminar evento: {str(e)}"
+        )
+
+@app.get("/eventos/{event_id}", response_model=EventResponse)
+async def get_evento(
+    event_id: str,
+    calendar_id: str = Query(default="primary"),
+    token_data: TokenData = Depends(verify_token)
+):
+    """
+    Obtener un evento específico de Google Calendar
+    
+    - **event_id**: ID del evento
+    - **calendar_id**: ID del calendario (por defecto "primary")
+    """
+    try:
+        # Verificar permisos para ver eventos
+        await permission_checker.require_permission(str(token_data.user_id), "events.view")
+        
+        if not google_calendar_service:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Servicio de Google Calendar no disponible"
+            )
+        
+        # Obtener evento de Google Calendar
+        event = google_calendar_service.get_event(calendar_id, event_id)
+        if not event:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Evento no encontrado"
+            )
+        
+        # Obtener datos de asistencia si existen
+        attendees = []
+        non_attendees = []
+        try:
+            attendance = await event_attendance_service.get_attendance(event['id'])
+            if attendance:
+                attendees = attendance.attendees
+                non_attendees = attendance.non_attendees
+        except Exception:
+            # Si hay error obteniendo asistencia, continuar con arrays vacíos
+            pass
+        
+        return EventResponse(
+            id=event['id'],
+            summary=event['summary'],
+            description=event.get('description', ''),
+            start=event['start'],
+            end=event['end'],
+            location=event.get('location', ''),
+            status=event['status'],
+            htmlLink=event['htmlLink'],
+            created=event['created'],
+            updated=event['updated'],
+            attendees=attendees,  # Datos de asistencia si existen
+            non_attendees=non_attendees  # Datos de no asistencia si existen
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al obtener evento: {str(e)}"
+        )
+
+@app.get("/eventos-con-asistencia-detallada", response_model=List[EventResponse])
+async def get_eventos_con_asistencia_detallada(
+    calendar_id: str = Query(default="primary", description="ID del calendario"),
+    max_results: int = Query(default=50, ge=1, le=100, description="Número máximo de eventos"),
+    days_ahead: int = Query(default=90, ge=1, le=365, description="Días hacia adelante para buscar eventos"),
+    token_data: TokenData = Depends(verify_token)
+):
+    """
+    Obtener eventos de Google Calendar con información de asistencia incluida en EventResponse
+    
+    - **calendar_id**: ID del calendario (por defecto 'primary')
+    - **max_results**: Número máximo de eventos a retornar (1-100, por defecto 50)
+    - **days_ahead**: Días hacia adelante para buscar eventos (1-365, por defecto 90 días)
+    
+    Retorna eventos con campos attendees y non_attendees poblados
+    """
+    try:
+        # Verificar permisos para ver eventos
+        await permission_checker.require_permission(str(token_data.user_id), "events.view")
+        
+        if not google_calendar_service:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Servicio de Google Calendar no disponible. Verifica la configuración."
+            )
+        
+        # Obtener eventos de Google Calendar
+        time_min = datetime.utcnow()
+        time_max = time_min + timedelta(days=days_ahead)
+        
+        eventos = google_calendar_service.get_events(
+            calendar_id=calendar_id,
+            max_results=max_results,
+            time_min=time_min,
+            time_max=time_max
+        )
+        
+        # Obtener todas las asistencias registradas
+        attendances = await event_attendance_service.get_all_attendances()
+        
+        # Crear un diccionario para búsqueda rápida por event_id
+        attendance_dict = {att.event_id: att for att in attendances}
+        
+        # Crear lista de EventResponse con asistencia incluida
+        eventos_con_asistencia = []
+        for evento in eventos:
+            event_id = evento.get("id")
+            
+            # Obtener datos de asistencia si existen
+            attendees = []
+            non_attendees = []
+            if event_id in attendance_dict:
+                attendance = attendance_dict[event_id]
+                attendees = attendance.attendees
+                non_attendees = attendance.non_attendees
+            
+            # Crear EventResponse con asistencia incluida
+            evento_response = EventResponse(
+                id=evento['id'],
+                summary=evento['summary'],
+                description=evento.get('description', ''),
+                start=evento['start'],
+                end=evento['end'],
+                location=evento.get('location', ''),
+                status=evento['status'],
+                htmlLink=evento['htmlLink'],
+                created=evento['created'],
+                updated=evento['updated'],
+                attendees=attendees,
+                non_attendees=non_attendees
+            )
+            
+            eventos_con_asistencia.append(evento_response)
+        
+        return eventos_con_asistencia
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al obtener eventos con asistencia detallada: {str(e)}"
         )
 
 # Función para ejecutar localmente

@@ -129,6 +129,8 @@ class UserModel(BaseModel):
     email: str
     name: str
     picture: Optional[str] = None
+    nickname: Optional[str] = ""  # Nombre que se mostrará en la interfaz
+    roles: List[str] = []  # Lista de roles del usuario
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -180,3 +182,42 @@ class TokenRefreshResponse(BaseModel):
 
 class TokenRevokeRequest(BaseModel):
     refresh_token: str
+
+# Modelos para administración de usuarios
+class UserUpdateRequest(BaseModel):
+    nickname: Optional[str] = None
+    roles: Optional[List[str]] = None
+    is_active: Optional[bool] = None
+
+class UserListResponse(BaseModel):
+    users: List[UserModel]
+    total: int
+    skip: int
+    limit: int
+
+class UserRoleUpdateRequest(BaseModel):
+    roles: List[str]
+
+class UserNicknameUpdateRequest(BaseModel):
+    nickname: str
+
+# Modelos para gestión de eventos
+class EventCreateRequest(BaseModel):
+    summary: str
+    description: Optional[str] = None
+    start_datetime: str  # ISO format datetime
+    end_datetime: str    # ISO format datetime
+    location: Optional[str] = None
+    calendar_id: str = "primary"
+
+class EventUpdateRequest(BaseModel):
+    summary: Optional[str] = None
+    description: Optional[str] = None
+    start_datetime: Optional[str] = None
+    end_datetime: Optional[str] = None
+    location: Optional[str] = None
+
+class EventDeleteResponse(BaseModel):
+    message: str
+    event_id: str
+    deleted: bool

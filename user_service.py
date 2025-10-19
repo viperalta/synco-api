@@ -1,7 +1,7 @@
 """
 Servicio para manejar usuarios en MongoDB
 """
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 from models import UserModel, GoogleUserInfo
 from mongodb_config import mongodb_config
@@ -54,6 +54,8 @@ class UserService:
                 "email": google_user_info.email,
                 "name": google_user_info.name,
                 "picture": google_user_info.picture,
+                "nickname": "",  # Campo vacío por defecto
+                "roles": [],  # Arreglo vacío por defecto
                 "is_active": True,
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow()
@@ -110,6 +112,99 @@ class UserService:
         else:
             # Crear nuevo usuario
             return await self.create_user(google_user_info)
+    
+    async def get_all_users(self, skip: int = 0, limit: int = 100) -> tuple[List[UserModel], int]:
+        """Obtener todos los usuarios con paginación"""
+        try:
+            collection = await self.get_collection()
+            
+            # Contar total de usuarios
+            total = await collection.count_documents({})
+            
+            # Obtener usuarios con paginación
+            cursor = collection.find({}).skip(skip).limit(limit)
+            users = []
+            async for user_data in cursor:
+                users.append(UserModel(**user_data))
+            
+            return users, total
+        except Exception as e:
+            print(f"Error al obtener usuarios: {e}")
+            return [], 0
+    
+    async def get_user_by_id(self, user_id: str) -> Optional[UserModel]:
+        """Obtener usuario por ID"""
+        try:
+            from bson import ObjectId
+            collection = await self.get_collection()
+            user_data = await collection.find_one({"_id": ObjectId(user_id)})
+            if user_data:
+                return UserModel(**user_data)
+            return None
+        except Exception as e:
+            print(f"Error al obtener usuario por ID: {e}")
+            return None
+    
+    async def update_user_roles(self, user_id: str, roles: List[str]) -> Optional[UserModel]:
+        """Actualizar roles de un usuario"""
+        try:
+            from bson import ObjectId
+            collection = await self.get_collection()
+            
+            update_data = {
+                "roles": roles,
+                "updated_at": datetime.utcnow()
+            }
+            
+            result = await collection.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": update_data}
+            )
+            
+            if result.modified_count > 0:
+                user_data = await collection.find_one({"_id": ObjectId(user_id)})
+                return UserModel(**user_data)
+            return None
+            
+        except Exception as e:
+            print(f"Error al actualizar roles del usuario: {e}")
+            return None
+    
+    async def update_user_nickname(self, user_id: str, nickname: str) -> Optional[UserModel]:
+        """Actualizar nickname de un usuario"""
+        try:
+            from bson import ObjectId
+            collection = await self.get_collection()
+            
+            update_data = {
+                "nickname": nickname,
+                "updated_at": datetime.utcnow()
+            }
+            
+            result = await collection.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$set": update_data}
+            )
+            
+            if result.modified_count > 0:
+                user_data = await collection.find_one({"_id": ObjectId(user_id)})
+                return UserModel(**user_data)
+            return None
+            
+        except Exception as e:
+            print(f"Error al actualizar nickname del usuario: {e}")
+            return None
+    
+    async def has_role(self, user_id: str, role: str) -> bool:
+        """Verificar si un usuario tiene un rol específico"""
+        try:
+            user = await self.get_user_by_id(user_id)
+            if not user:
+                return False
+            return role in user.roles
+        except Exception as e:
+            print(f"Error al verificar rol del usuario: {e}")
+            return False
 
 # Instancia global del servicio
 user_service = UserService()
