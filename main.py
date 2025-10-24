@@ -1306,41 +1306,74 @@ async def get_session(request: Request):
 @app.get("/auth/google/silent")
 async def google_silent_login(email: str = Query(..., description="Email del usuario para silent login")):
     """
-    Silent login con Google (sin UI)
+    Silent login usando verificación interna de usuario.
+    No hace llamadas a Google OAuth para evitar problemas CORS.
     """
     try:
-        # Generar PKCE parameters
-        code_verifier, code_challenge = generate_pkce_pair()
-        state = generate_state()
-        nonce = generate_nonce()
+        print(f"=== DEBUG: Silent login iniciado para email: {email} ===")
         
-        # Guardar PKCE parameters temporalmente (en producción usar Redis)
-        # Por ahora los pasamos en el state
-        pkce_data = {
-            "code_verifier": code_verifier,
-            "email": email
-        }
-        encoded_pkce = base64.urlsafe_b64encode(json.dumps(pkce_data).encode()).decode()
+        # 1. Verificar conexión a MongoDB
+        try:
+            await mongodb_config.get_database().command("ping")
+            print("=== DEBUG: MongoDB conectado ===")
+        except Exception as e:
+            print(f"Reconectando a MongoDB en silent login: {e}")
+            await mongodb_config.connect()
         
-        # Construir URL de Google OAuth
-        google_auth_url = (
-            "https://accounts.google.com/o/oauth2/v2/auth?"
-            f"client_id={GOOGLE_CLIENT_ID}&"
-            f"redirect_uri={GOOGLE_REDIRECT_URI}&"
-            f"response_type=code&"
-            f"scope=openid email profile&"
-            f"prompt=none&"
-            f"login_hint={email}&"
-            f"state={encoded_pkce}&"
-            f"nonce={nonce}&"
-            f"code_challenge={code_challenge}&"
-            f"code_challenge_method=S256&"
-            f"include_granted_scopes=true"
+        # 2. Verificar si el usuario existe en la base de datos
+        user = await user_service.get_user_by_email(email)
+        
+        if not user:
+            print(f"=== DEBUG: Usuario no encontrado: {email} ===")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, 
+                detail="User not found"
+            )
+        
+        if not user.is_active:
+            print(f"=== DEBUG: Usuario inactivo: {email} ===")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED, 
+                detail="User inactive"
+            )
+        
+        print(f"=== DEBUG: Usuario encontrado y activo: {user.email} ===")
+        
+        # 3. Generar tokens directamente
+        access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+        access_token = create_access_token(
+            data={"sub": str(user.id), "email": user.email},
+            expires_delta=access_token_expires
         )
         
-        return RedirectResponse(url=google_auth_url)
+        refresh_token = create_refresh_token(
+            data={"sub": str(user.id), "email": user.email}
+        )
         
+        # 4. Guardar refresh token en la base de datos
+        await refresh_token_service.create_refresh_token(str(user.id), refresh_token)
+        
+        print(f"=== DEBUG: Tokens generados para usuario: {user.email} ===")
+        
+        # 5. Retornar respuesta JSON (no redirección)
+        return {
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "token_type": "bearer",
+            "expires_in": ACCESS_TOKEN_EXPIRE_MINUTES * 60,  # 24 horas en segundos
+            "user": {
+                "id": str(user.id),
+                "email": user.email,
+                "name": user.name,
+                "roles": user.roles,
+                "is_active": user.is_active
+            }
+        }
+        
+    except HTTPException:
+        raise
     except Exception as e:
+        print(f"=== DEBUG: Error en silent login para {email}: {str(e)} ===")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error en silent login: {str(e)}"
