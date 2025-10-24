@@ -131,6 +131,7 @@ class UserModel(BaseModel):
     picture: Optional[str] = None
     nickname: Optional[str] = ""  # Nombre que se mostrará en la interfaz
     roles: List[str] = []  # Lista de roles del usuario
+    tipo_eventos: List[str] = []  # Lista de tipos de eventos en los que participa
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -187,6 +188,7 @@ class TokenRevokeRequest(BaseModel):
 class UserUpdateRequest(BaseModel):
     nickname: Optional[str] = None
     roles: Optional[List[str]] = None
+    tipo_eventos: Optional[List[str]] = None
     is_active: Optional[bool] = None
 
 class UserListResponse(BaseModel):

@@ -1,7 +1,7 @@
 """
 Servicio para manejar usuarios en MongoDB
 """
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from datetime import datetime
 from models import UserModel, GoogleUserInfo
 from database_services import get_mongodb_connection
@@ -10,37 +10,71 @@ class UserService:
     def __init__(self):
         self.collection_name = "users"
     
-    async def get_user_by_google_id(self, google_id: str) -> Optional[UserModel]:
-        """Obtener usuario por Google ID"""
-        client, database = await get_mongodb_connection()
-        collection = database[self.collection_name]
-        
-        try:
-            user_data = await collection.find_one({"google_id": google_id})
-            if user_data:
-                return UserModel(**user_data)
-            return None
-        except Exception as e:
-            print(f"Error al obtener usuario por Google ID: {e}")
-            return None
-        finally:
-            client.close()
+    def _get_collection(self, database=None):
+        """Obtener colección de usuarios"""
+        if database:
+            return database[self.collection_name]
+        else:
+            # Fallback para compatibilidad con código existente
+            raise ValueError("Se requiere database para operaciones con conexión reutilizada")
     
-    async def get_user_by_email(self, email: str) -> Optional[UserModel]:
+    async def get_user_by_google_id(self, google_id: str, database=None) -> Optional[UserModel]:
+        """Obtener usuario por Google ID"""
+        if database:
+            # Usar conexión externa
+            collection = self._get_collection(database)
+            try:
+                user_data = await collection.find_one({"google_id": google_id})
+                if user_data:
+                    return UserModel(**user_data)
+                return None
+            except Exception as e:
+                print(f"Error al obtener usuario por Google ID: {e}")
+                return None
+        else:
+            # Usar conexión propia (compatibilidad)
+            client, database = await get_mongodb_connection()
+            collection = database[self.collection_name]
+            
+            try:
+                user_data = await collection.find_one({"google_id": google_id})
+                if user_data:
+                    return UserModel(**user_data)
+                return None
+            except Exception as e:
+                print(f"Error al obtener usuario por Google ID: {e}")
+                return None
+            finally:
+                client.close()
+    
+    async def get_user_by_email(self, email: str, database=None) -> Optional[UserModel]:
         """Obtener usuario por email"""
-        client, database = await get_mongodb_connection()
-        collection = database[self.collection_name]
-        
-        try:
-            user_data = await collection.find_one({"email": email})
-            if user_data:
-                return UserModel(**user_data)
-            return None
-        except Exception as e:
-            print(f"Error al obtener usuario por email: {e}")
-            return None
-        finally:
-            client.close()
+        if database:
+            # Usar conexión externa
+            collection = self._get_collection(database)
+            try:
+                user_data = await collection.find_one({"email": email})
+                if user_data:
+                    return UserModel(**user_data)
+                return None
+            except Exception as e:
+                print(f"Error al obtener usuario por email: {e}")
+                return None
+        else:
+            # Usar conexión propia (compatibilidad)
+            client, database = await get_mongodb_connection()
+            collection = database[self.collection_name]
+            
+            try:
+                user_data = await collection.find_one({"email": email})
+                if user_data:
+                    return UserModel(**user_data)
+                return None
+            except Exception as e:
+                print(f"Error al obtener usuario por email: {e}")
+                return None
+            finally:
+                client.close()
     
     async def create_user(self, google_user_info: GoogleUserInfo) -> UserModel:
         """Crear nuevo usuario"""
@@ -61,6 +95,7 @@ class UserService:
                 "picture": google_user_info.picture,
                 "nickname": "",  # Campo vacío por defecto
                 "roles": [],  # Arreglo vacío por defecto
+                "tipo_eventos": [],  # Arreglo vacío por defecto
                 "is_active": True,
                 "created_at": datetime.utcnow(),
                 "updated_at": datetime.utcnow()
@@ -77,31 +112,54 @@ class UserService:
         finally:
             client.close()
     
-    async def update_user(self, user_id: str, update_data: dict) -> Optional[UserModel]:
+    async def update_user(self, user_id: str, update_data: dict, database=None) -> Optional[UserModel]:
         """Actualizar usuario"""
-        client, database = await get_mongodb_connection()
-        collection = database[self.collection_name]
-        
-        try:
-            from bson import ObjectId
+        if database:
+            # Usar conexión externa
+            collection = self._get_collection(database)
+            try:
+                from bson import ObjectId
+                
+                update_data["updated_at"] = datetime.utcnow()
+                
+                result = await collection.update_one(
+                    {"_id": ObjectId(user_id)},
+                    {"$set": update_data}
+                )
+                
+                if result.modified_count > 0:
+                    user_data = await collection.find_one({"_id": ObjectId(user_id)})
+                    return UserModel(**user_data)
+                return None
+                
+            except Exception as e:
+                print(f"Error al actualizar usuario: {e}")
+                return None
+        else:
+            # Usar conexión propia (compatibilidad)
+            client, database = await get_mongodb_connection()
+            collection = database[self.collection_name]
             
-            update_data["updated_at"] = datetime.utcnow()
-            
-            result = await collection.update_one(
-                {"_id": ObjectId(user_id)},
-                {"$set": update_data}
-            )
-            
-            if result.modified_count > 0:
-                user_data = await collection.find_one({"_id": ObjectId(user_id)})
-                return UserModel(**user_data)
-            return None
-            
-        except Exception as e:
-            print(f"Error al actualizar usuario: {e}")
-            return None
-        finally:
-            client.close()
+            try:
+                from bson import ObjectId
+                
+                update_data["updated_at"] = datetime.utcnow()
+                
+                result = await collection.update_one(
+                    {"_id": ObjectId(user_id)},
+                    {"$set": update_data}
+                )
+                
+                if result.modified_count > 0:
+                    user_data = await collection.find_one({"_id": ObjectId(user_id)})
+                    return UserModel(**user_data)
+                return None
+                
+            except Exception as e:
+                print(f"Error al actualizar usuario: {e}")
+                return None
+            finally:
+                client.close()
     
     async def get_or_create_user(self, google_user_info: GoogleUserInfo) -> UserModel:
         """Obtener usuario existente o crear uno nuevo"""
@@ -124,44 +182,77 @@ class UserService:
             # Crear nuevo usuario
             return await self.create_user(google_user_info)
     
-    async def get_all_users(self, skip: int = 0, limit: int = 100) -> tuple[List[UserModel], int]:
+    async def get_all_users(self, skip: int = 0, limit: int = 100, database=None) -> Tuple[List[UserModel], int]:
         """Obtener todos los usuarios con paginación"""
-        client, database = await get_mongodb_connection()
-        collection = database[self.collection_name]
-        
-        try:
-            # Contar total de usuarios
-            total = await collection.count_documents({})
+        if database:
+            # Usar conexión externa
+            collection = self._get_collection(database)
+            try:
+                # Contar total de usuarios
+                total = await collection.count_documents({})
+                
+                # Obtener usuarios con paginación
+                cursor = collection.find({}).skip(skip).limit(limit)
+                users = []
+                async for user_data in cursor:
+                    users.append(UserModel(**user_data))
+                
+                return users, total
+            except Exception as e:
+                print(f"Error al obtener usuarios: {e}")
+                return [], 0
+        else:
+            # Usar conexión propia (compatibilidad)
+            client, database = await get_mongodb_connection()
+            collection = database[self.collection_name]
             
-            # Obtener usuarios con paginación
-            cursor = collection.find({}).skip(skip).limit(limit)
-            users = []
-            async for user_data in cursor:
-                users.append(UserModel(**user_data))
-            
-            return users, total
-        except Exception as e:
-            print(f"Error al obtener usuarios: {e}")
-            return [], 0
-        finally:
-            client.close()
+            try:
+                # Contar total de usuarios
+                total = await collection.count_documents({})
+                
+                # Obtener usuarios con paginación
+                cursor = collection.find({}).skip(skip).limit(limit)
+                users = []
+                async for user_data in cursor:
+                    users.append(UserModel(**user_data))
+                
+                return users, total
+            except Exception as e:
+                print(f"Error al obtener usuarios: {e}")
+                return [], 0
+            finally:
+                client.close()
     
-    async def get_user_by_id(self, user_id: str) -> Optional[UserModel]:
+    async def get_user_by_id(self, user_id: str, database=None) -> Optional[UserModel]:
         """Obtener usuario por ID"""
-        client, database = await get_mongodb_connection()
-        collection = database[self.collection_name]
-        
-        try:
-            from bson import ObjectId
-            user_data = await collection.find_one({"_id": ObjectId(user_id)})
-            if user_data:
-                return UserModel(**user_data)
-            return None
-        except Exception as e:
-            print(f"Error al obtener usuario por ID: {e}")
-            return None
-        finally:
-            client.close()
+        if database:
+            # Usar conexión externa
+            collection = self._get_collection(database)
+            try:
+                from bson import ObjectId
+                user_data = await collection.find_one({"_id": ObjectId(user_id)})
+                if user_data:
+                    return UserModel(**user_data)
+                return None
+            except Exception as e:
+                print(f"Error al obtener usuario por ID: {e}")
+                return None
+        else:
+            # Usar conexión propia (compatibilidad)
+            client, database = await get_mongodb_connection()
+            collection = database[self.collection_name]
+            
+            try:
+                from bson import ObjectId
+                user_data = await collection.find_one({"_id": ObjectId(user_id)})
+                if user_data:
+                    return UserModel(**user_data)
+                return None
+            except Exception as e:
+                print(f"Error al obtener usuario por ID: {e}")
+                return None
+            finally:
+                client.close()
     
     async def update_user_roles(self, user_id: str, roles: List[str]) -> Optional[UserModel]:
         """Actualizar roles de un usuario"""

@@ -1714,7 +1714,7 @@ async def update_user_admin(
     Actualizar información de un usuario (solo administradores)
     
     - **user_id**: ID del usuario a actualizar
-    - **update_request**: Datos a actualizar (nickname, roles, is_active)
+    - **update_request**: Datos a actualizar (nickname, roles, tipo_eventos, is_active)
     """
     try:
         # Obtener usuario desde Authorization header o sesión
@@ -1750,6 +1750,8 @@ async def update_user_admin(
             update_data["nickname"] = update_request.nickname
         if update_request.roles is not None:
             update_data["roles"] = update_request.roles
+        if update_request.tipo_eventos is not None:
+            update_data["tipo_eventos"] = update_request.tipo_eventos
         if update_request.is_active is not None:
             update_data["is_active"] = update_request.is_active
         
