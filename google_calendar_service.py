@@ -239,3 +239,65 @@ class GoogleCalendarService:
         except Exception as e:
             logger.error(f"Error inesperado al obtener evento: {e}")
             raise
+    
+    def create_event(self, calendar_id: str, event_data: Dict) -> Dict:
+        """
+        Crear un nuevo evento en Google Calendar
+        
+        Args:
+            calendar_id: ID del calendario donde crear el evento
+            event_data: Datos del evento a crear
+        
+        Returns:
+            Evento creado
+        """
+        try:
+            if not self.service:
+                raise Exception("Servicio de Google Calendar no inicializado")
+            
+            # Crear el evento en Google Calendar
+            created_event = self.service.events().insert(
+                calendarId=calendar_id,
+                body=event_data
+            ).execute()
+            
+            logger.info(f"Evento creado exitosamente en calendario {calendar_id} con ID: {created_event.get('id')}")
+            return created_event
+            
+        except HttpError as error:
+            logger.error(f"Error de Google Calendar API al crear evento: {error}")
+            raise Exception(f"Error al crear evento en Google Calendar: {error}")
+        except Exception as e:
+            logger.error(f"Error inesperado al crear evento: {e}")
+            raise
+    
+    def delete_event(self, calendar_id: str, event_id: str) -> bool:
+        """
+        Eliminar un evento de Google Calendar
+        
+        Args:
+            calendar_id: ID del calendario
+            event_id: ID del evento a eliminar
+        
+        Returns:
+            True si se eliminó exitosamente
+        """
+        try:
+            if not self.service:
+                raise Exception("Servicio de Google Calendar no inicializado")
+            
+            # Eliminar el evento
+            self.service.events().delete(
+                calendarId=calendar_id,
+                eventId=event_id
+            ).execute()
+            
+            logger.info(f"Evento {event_id} eliminado exitosamente del calendario {calendar_id}")
+            return True
+            
+        except HttpError as error:
+            logger.error(f"Error de Google Calendar API al eliminar evento: {error}")
+            raise Exception(f"Error al eliminar evento de Google Calendar: {error}")
+        except Exception as e:
+            logger.error(f"Error inesperado al eliminar evento: {e}")
+            raise

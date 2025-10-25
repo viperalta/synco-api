@@ -1955,9 +1955,10 @@ async def create_evento(
     token_data: TokenData = Depends(verify_token)
 ):
     """
-    Crear un nuevo evento en Google Calendar
+    Crear un nuevo evento en Google Calendar y MongoDB
     
     - **event_request**: Datos del evento a crear
+    - Guarda el evento tanto en Google Calendar como en la colección 'events' de MongoDB
     """
     try:
         # Verificar permisos para crear eventos
@@ -1989,6 +1990,23 @@ async def create_evento(
             event_request.calendar_id, 
             event_data
         )
+        
+        # Guardar evento en MongoDB
+        mongo_event_data = {
+            'google_event_id': created_event['id'],
+            'summary': created_event['summary'],
+            'description': created_event.get('description', ''),
+            'start_datetime': event_request.start_datetime,
+            'end_datetime': event_request.end_datetime,
+            'location': created_event.get('location', ''),
+            'status': created_event['status'],
+            'html_link': created_event['htmlLink'],
+            'is_all_day': False,  # Por defecto no es evento de todo el día
+            'calendar_id': event_request.calendar_id
+        }
+        
+        # Guardar en MongoDB
+        mongo_event = await calendar_event_service.create_event(mongo_event_data)
         
         return EventResponse(
             id=created_event['id'],
