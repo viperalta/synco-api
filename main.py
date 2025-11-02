@@ -17,8 +17,9 @@ from mongodb_config import mongodb_config
 from models import ItemModel, ItemCreate, ItemUpdate, AttendanceRequest, AttendanceResponse, EventAttendanceModel, UserModel, TokenResponse, GoogleUserInfo, TokenRefreshRequest, TokenRefreshResponse, TokenRevokeRequest, UserUpdateRequest, UserListResponse, UserRoleUpdateRequest, UserNicknameUpdateRequest, EventCreateRequest, EventUpdateRequest, EventDeleteResponse, PaymentCreateRequest, PaymentUpdateRequest, PaymentResponse, PaymentListResponse, PaymentVerificationRequest, S3UploadResponse, S3DownloadResponse, ConfirmUploadRequest, BulkDeletePaymentsRequest, BulkVerifyPaymentsRequest, DebtCreateRequest, DebtUpdateRequest, DebtResponse, DebtListResponse, PlayerDebtResponse
 from database_services import item_service, calendar_event_service, calendar_service, event_attendance_service
 from payment_service import PaymentService
-from debt_service import get_debt_service
+from debt_service import DebtService, get_debt_service
 from s3_service import s3_service
+from motor.motor_asyncio import AsyncIOMotorClient
 from event_formatter import format_event_description_with_attendance, extract_original_description, is_all_day_event
 from auth import create_access_token, create_refresh_token, verify_token, verify_token_string, verify_refresh_token, get_google_user_info, TokenData, ACCESS_TOKEN_EXPIRE_MINUTES, get_current_user
 from user_service import user_service
@@ -167,17 +168,45 @@ app.add_middleware(
 
 # Inicializar servicios
 # MongoDB se conectará automáticamente cuando se necesite
-payment_service = None  # Se inicializará cuando se conecte MongoDB
 
-async def get_payment_service():
-    """Obtener el servicio de pagos, conectando MongoDB si es necesario"""
-    global payment_service
-    if payment_service is None:
-        # Conectar MongoDB si no está conectado
-        if mongodb_config.database is None:
-            await mongodb_config.connect()
-        payment_service = PaymentService(mongodb_config.get_database())
-    return payment_service
+async def get_mongodb_connection():
+    """Obtener una nueva conexión MongoDB para cada request (compatible con Vercel)"""
+    mongodb_url = os.getenv("MONGODB_URL")
+    database_name = os.getenv("MONGODB_DATABASE", "synco_db")
+    
+    if not mongodb_url:
+        raise ValueError("MONGODB_URL no está configurada en las variables de entorno")
+    
+    try:
+        # Crear nueva conexión para cada request
+        client = AsyncIOMotorClient(
+            mongodb_url,
+            serverSelectionTimeoutMS=3000,
+            connectTimeoutMS=5000,
+            socketTimeoutMS=10000,
+            maxPoolSize=1,  # Una sola conexión por request
+            minPoolSize=0,
+            maxIdleTimeMS=10000,
+            retryWrites=True,
+            retryReads=True,
+        )
+        
+        database = client[database_name]
+        
+        # Verificar conexión
+        await client.admin.command('ping')
+        
+        return client, database
+    except Exception as e:
+        raise ValueError(f"Error al conectar con MongoDB: {e}")
+
+async def get_payment_service(database):
+    """Obtener el servicio de pagos con una instancia de database"""
+    return PaymentService(database)
+
+async def get_debt_service_new(database):
+    """Obtener el servicio de deudas con una instancia de database"""
+    return DebtService(database)
 
 # Modelos Pydantic
 class Item(BaseModel):
@@ -2331,14 +2360,19 @@ async def create_payment(
     """
     Crear un nuevo pago
     """
+    client = None
     try:
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         payment = await service.create_payment(current_user.id, payment_data)
         return payment
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creando pago: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.get("/payments/{payment_id}", response_model=PaymentResponse)
 async def get_payment(
@@ -2348,8 +2382,10 @@ async def get_payment(
     """
     Obtener un pago específico por ID
     """
+    client = None
     try:
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         payment = await service.get_payment_by_id(payment_id, current_user.id)
         if not payment:
             raise HTTPException(status_code=404, detail="Pago no encontrado")
@@ -2358,6 +2394,9 @@ async def get_payment(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo pago: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.get("/payments", response_model=PaymentListResponse)
 async def get_user_payments(
@@ -2369,8 +2408,10 @@ async def get_user_payments(
     """
     Obtener todos los pagos del usuario autenticado, opcionalmente filtrados por período
     """
+    client = None
     try:
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         
         # Si se proporciona un período, filtrar por período
         if period:
@@ -2384,6 +2425,9 @@ async def get_user_payments(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo pagos: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.get("/payments/period/{period}", response_model=PaymentListResponse)
 async def get_payments_by_period(
@@ -2395,14 +2439,19 @@ async def get_payments_by_period(
     """
     Obtener todos los pagos de un período específico
     """
+    client = None
     try:
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         payments = await service.get_payments_by_period(period, skip, limit)
         return payments
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo pagos por período: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.get("/admin/payments", response_model=PaymentListResponse)
 async def get_all_payments(
@@ -2415,12 +2464,17 @@ async def get_all_payments(
     """
     Obtener todos los pagos (solo administradores)
     """
+    client = None
     try:
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         payments = await service.get_all_payments(skip, limit, status, period)
         return payments
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo todos los pagos: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.put("/payments/{payment_id}", response_model=PaymentResponse)
 async def update_payment(
@@ -2431,8 +2485,11 @@ async def update_payment(
     """
     Actualizar un pago existente
     """
+    client = None
     try:
-        payment = await payment_service.update_payment(payment_id, current_user.id, update_data)
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
+        payment = await service.update_payment(payment_id, current_user.id, update_data)
         if not payment:
             raise HTTPException(status_code=404, detail="Pago no encontrado")
         return payment
@@ -2442,6 +2499,9 @@ async def update_payment(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error actualizando pago: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.put("/admin/payments/{payment_id}/verify", response_model=PaymentResponse)
 async def verify_payment(
@@ -2452,8 +2512,10 @@ async def verify_payment(
     """
     Verificar un pago (solo administradores)
     """
+    client = None
     try:
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         payment = await service.verify_payment(
             payment_id, 
             current_user.id, 
@@ -2469,6 +2531,9 @@ async def verify_payment(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error verificando pago: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.post("/admin/payments/bulk-verify")
 async def bulk_verify_payments(
@@ -2478,10 +2543,12 @@ async def bulk_verify_payments(
     """
     Verificar múltiples pagos como administrador
     """
+    client = None
     try:
         from bson import ObjectId
         from datetime import datetime
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         
         # Validar status
         if request_data.status not in ["verified", "rejected"]:
@@ -2535,6 +2602,9 @@ async def bulk_verify_payments(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en verificación masiva: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.delete("/payments/{payment_id}")
 async def delete_payment(
@@ -2544,8 +2614,10 @@ async def delete_payment(
     """
     Eliminar un pago (solo el propio usuario)
     """
+    client = None
     try:
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         success = await service.delete_payment(payment_id, current_user.id)
         if not success:
             raise HTTPException(status_code=404, detail="Pago no encontrado")
@@ -2554,6 +2626,9 @@ async def delete_payment(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error eliminando pago: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.post("/admin/payments/bulk-delete")
 async def bulk_delete_payments(
@@ -2563,9 +2638,11 @@ async def bulk_delete_payments(
     """
     Eliminar múltiples pagos como administrador
     """
+    client = None
     try:
         from bson import ObjectId
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         
         deleted_count = 0
         not_found_count = 0
@@ -2605,6 +2682,9 @@ async def bulk_delete_payments(
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error en eliminación masiva: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.delete("/admin/payments/{payment_id}")
 async def delete_payment_admin(
@@ -2614,9 +2694,11 @@ async def delete_payment_admin(
     """
     Eliminar un pago como administrador (permite eliminar cualquier pago)
     """
+    client = None
     try:
         from bson import ObjectId
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         
         # Verificar que no sea el endpoint bulk-delete
         if payment_id == "bulk-delete":
@@ -2641,6 +2723,9 @@ async def delete_payment_admin(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error eliminando pago: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.post("/payments/{payment_id}/upload-url", response_model=S3UploadResponse)
 async def get_upload_url(
@@ -2652,9 +2737,12 @@ async def get_upload_url(
     """
     Generar URL prefirmada para subir comprobante de pago
     """
+    client = None
     try:
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         # Verificar que el pago existe y pertenece al usuario
-        payment = await payment_service.get_payment_by_id(payment_id, current_user.id)
+        payment = await service.get_payment_by_id(payment_id, current_user.id)
         if not payment:
             raise HTTPException(status_code=404, detail="Pago no encontrado")
         
@@ -2671,6 +2759,9 @@ async def get_upload_url(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generando URL de subida: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.post("/payments/{payment_id}/confirm-upload")
 async def confirm_upload(
@@ -2681,9 +2772,11 @@ async def confirm_upload(
     """
     Confirmar que se subió el comprobante y actualizar el pago
     """
+    client = None
     try:
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         # Verificar que el pago existe y pertenece al usuario
-        service = await get_payment_service()
         payment = await service.get_payment_by_id(payment_id, current_user.id)
         if not payment:
             raise HTTPException(status_code=404, detail="Pago no encontrado")
@@ -2700,6 +2793,9 @@ async def confirm_upload(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error confirmando subida: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.get("/payments/{payment_id}/download-url", response_model=S3DownloadResponse)
 async def get_download_url(
@@ -2710,9 +2806,11 @@ async def get_download_url(
     """
     Generar URL prefirmada para descargar comprobante de pago
     """
+    client = None
     try:
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         # Verificar que el pago existe y pertenece al usuario
-        service = await get_payment_service()
         payment = await service.get_payment_by_id(payment_id, current_user.id)
         if not payment:
             raise HTTPException(status_code=404, detail="Pago no encontrado")
@@ -2736,6 +2834,9 @@ async def get_download_url(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generando URL de descarga: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.get("/admin/payments/{payment_id}/download-url", response_model=S3DownloadResponse)
 async def get_download_url_admin(
@@ -2746,9 +2847,10 @@ async def get_download_url_admin(
     """
     Generar URL prefirmada para descargar comprobante de pago (solo administradores)
     """
+    client = None
     try:
-        # Obtener el documento completo de MongoDB
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         from bson import ObjectId
         
         # No filtrar por user_id, permitir descargar cualquier pago
@@ -2769,6 +2871,9 @@ async def get_download_url_admin(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generando URL de descarga: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.get("/admin/payments/statistics")
 async def get_payment_statistics(
@@ -2779,12 +2884,17 @@ async def get_payment_statistics(
     """
     Obtener estadísticas de pagos (solo administradores)
     """
+    client = None
     try:
-        service = await get_payment_service()
+        client, database = await get_mongodb_connection()
+        service = await get_payment_service(database)
         stats = await service.get_payment_statistics(user_id, period)
         return stats
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo estadísticas: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 # ==================== ENDPOINTS DE DEUDAS ====================
 
@@ -2796,14 +2906,19 @@ async def create_debt(
     """
     Crear un registro de deuda para un período (solo administradores)
     """
+    client = None
     try:
-        service = await get_debt_service()
+        client, database = await get_mongodb_connection()
+        service = await get_debt_service_new(database)
         debt = await service.create_debt(debt_data)
         return debt
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creando deuda: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.get("/admin/debts", response_model=DebtListResponse)
 async def get_all_debts(
@@ -2814,12 +2929,17 @@ async def get_all_debts(
     """
     Obtener todas las deudas (solo administradores)
     """
+    client = None
     try:
-        service = await get_debt_service()
+        client, database = await get_mongodb_connection()
+        service = await get_debt_service_new(database)
         debts = await service.get_all_debts(skip, limit)
         return debts
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo deudas: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.get("/admin/debts/{period}", response_model=DebtResponse)
 async def get_debt_by_period(
@@ -2829,8 +2949,10 @@ async def get_debt_by_period(
     """
     Obtener deuda por período (solo administradores)
     """
+    client = None
     try:
-        service = await get_debt_service()
+        client, database = await get_mongodb_connection()
+        service = await get_debt_service_new(database)
         debt = await service.get_debt_by_period(period)
         if not debt:
             raise HTTPException(status_code=404, detail="Deuda no encontrada para este período")
@@ -2841,6 +2963,9 @@ async def get_debt_by_period(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo deuda: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.put("/admin/debts/{period}", response_model=DebtResponse)
 async def update_debt(
@@ -2851,8 +2976,10 @@ async def update_debt(
     """
     Actualizar deuda para un período (solo administradores)
     """
+    client = None
     try:
-        service = await get_debt_service()
+        client, database = await get_mongodb_connection()
+        service = await get_debt_service_new(database)
         debt = await service.update_debt(period, update_data)
         if not debt:
             raise HTTPException(status_code=404, detail="Deuda no encontrada para este período")
@@ -2863,6 +2990,9 @@ async def update_debt(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error actualizando deuda: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.delete("/admin/debts/{period}")
 async def delete_debt(
@@ -2872,8 +3002,10 @@ async def delete_debt(
     """
     Eliminar deuda para un período (solo administradores)
     """
+    client = None
     try:
-        service = await get_debt_service()
+        client, database = await get_mongodb_connection()
+        service = await get_debt_service_new(database)
         deleted = await service.delete_debt(period)
         if not deleted:
             raise HTTPException(status_code=404, detail="Deuda no encontrada para este período")
@@ -2884,6 +3016,9 @@ async def delete_debt(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error eliminando deuda: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 @app.get("/player/debt/{period}", response_model=PlayerDebtResponse)
 async def get_player_debt(
@@ -2893,8 +3028,10 @@ async def get_player_debt(
     """
     Obtener deuda del jugador para un período específico
     """
+    client = None
     try:
-        service = await get_debt_service()
+        client, database = await get_mongodb_connection()
+        service = await get_debt_service_new(database)
         debt = await service.get_player_debt(str(current_user.id), period)
         if not debt:
             raise HTTPException(status_code=404, detail="No tienes deuda registrada para este período")
@@ -2905,6 +3042,9 @@ async def get_player_debt(
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error obteniendo tu deuda: {str(e)}")
+    finally:
+        if client:
+            client.close()
 
 # Función para ejecutar localmente
 if __name__ == "__main__":
