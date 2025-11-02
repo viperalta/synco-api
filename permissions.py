@@ -2,8 +2,10 @@
 Sistema de permisos y roles para usuarios
 """
 from typing import List
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Depends
 from user_service import user_service
+from auth import verify_token, get_current_user
+from models import UserModel
 
 # Definición de roles disponibles
 AVAILABLE_ROLES = [
@@ -165,3 +167,20 @@ class PermissionChecker:
 
 # Instancia global del verificador de permisos
 permission_checker = PermissionChecker()
+
+# Función de dependencia para FastAPI
+async def require_admin_role(current_user: UserModel = Depends(get_current_user)):
+    """
+    Dependencia de FastAPI para requerir rol de administrador
+    """
+    await permission_checker.require_admin(current_user.id)
+    return current_user
+
+async def require_permission(permission: str):
+    """
+    Factory function para crear dependencias de permisos específicos
+    """
+    async def permission_dependency(current_user: UserModel = Depends(get_current_user)):
+        await permission_checker.require_permission(current_user.id, permission)
+        return current_user
+    return permission_dependency

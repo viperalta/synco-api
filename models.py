@@ -223,3 +223,131 @@ class EventDeleteResponse(BaseModel):
     message: str
     event_id: str
     deleted: bool
+
+# Modelos para gestión de pagos
+class PaymentModel(BaseModel):
+    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    user_id: PyObjectId  # ID del usuario que realizó el pago
+    user_name: str  # Nombre del usuario
+    user_nickname: Optional[str] = None  # Nickname del usuario
+    amount: float  # Monto del pago
+    period: str  # Período en formato YYYYMM (ej: 202510)
+    payment_date: datetime  # Fecha exacta del pago
+    receipt_image_url: Optional[str] = None  # URL del comprobante en S3
+    receipt_image_key: Optional[str] = None  # Clave del archivo en S3
+    status: str = "pending"  # pending, verified, rejected
+    notes: Optional[str] = None  # Notas adicionales
+    verified_by: Optional[PyObjectId] = None  # ID del usuario que verificó el pago
+    verified_at: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        populate_by_name = True
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+
+class PaymentCreateRequest(BaseModel):
+    amount: float
+    period: str  # Formato YYYYMM
+    payment_date: Optional[datetime] = None
+    notes: Optional[str] = None
+
+class PaymentUpdateRequest(BaseModel):
+    amount: Optional[float] = None
+    period: Optional[str] = None
+    payment_date: Optional[datetime] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+class PaymentResponse(BaseModel):
+    id: str
+    user_id: str
+    user_name: str
+    user_nickname: Optional[str] = None
+    amount: float
+    period: str
+    payment_date: datetime
+    receipt_image_url: Optional[str] = None
+    status: str
+    notes: Optional[str] = None
+    verified_by: Optional[str] = None
+    verified_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+class PaymentListResponse(BaseModel):
+    payments: List[PaymentResponse]
+    total: int
+    skip: int
+    limit: int
+
+class PaymentVerificationRequest(BaseModel):
+    status: str  # verified, rejected
+    notes: Optional[str] = None
+
+class S3UploadResponse(BaseModel):
+    upload_url: str
+    file_key: str
+    expires_in: int
+
+class S3DownloadResponse(BaseModel):
+    download_url: str
+    expires_in: int
+
+class ConfirmUploadRequest(BaseModel):
+    file_key: str
+
+class BulkDeletePaymentsRequest(BaseModel):
+    payment_ids: List[str]  # Lista de IDs de pagos a eliminar
+
+class BulkVerifyPaymentsRequest(BaseModel):
+    payment_ids: List[str]  # Lista de IDs de pagos a verificar
+    status: str  # "verified" o "rejected"
+    notes: Optional[str] = None  # Notas de verificación
+
+# Modelos para gestión de deudas
+class DebtorInfo(BaseModel):
+    user_id: str
+    user_name: str
+    user_nickname: Optional[str] = None
+    amount: float
+
+class DebtModel(BaseModel):
+    id: Optional[PyObjectId] = Field(default_factory=PyObjectId, alias="_id")
+    period: str  # Período en formato YYYYMM (ej: 202510)
+    debtors: List[DebtorInfo]  # Lista de deudores con sus deudas
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Config:
+        populate_by_name = True
+        arbitrary_types_allowed = True
+        json_encoders = {ObjectId: str}
+
+class DebtCreateRequest(BaseModel):
+    period: str
+    debtors: List[DebtorInfo]
+
+class DebtUpdateRequest(BaseModel):
+    debtors: List[DebtorInfo]
+
+class DebtResponse(BaseModel):
+    id: str
+    period: str
+    debtors: List[DebtorInfo]
+    total_debt: float
+    created_at: datetime
+    updated_at: datetime
+
+class DebtListResponse(BaseModel):
+    debts: List[DebtResponse]
+    total: int
+    skip: int
+    limit: int
+
+class PlayerDebtResponse(BaseModel):
+    period: str
+    amount: float
+    user_name: str
+    user_nickname: Optional[str] = None

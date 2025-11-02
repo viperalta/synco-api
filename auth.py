@@ -96,6 +96,22 @@ def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
     """Verificar token JWT de acceso (para dependencias de FastAPI)"""
     return verify_token_string(credentials.credentials)
 
+async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> UserModel:
+    """Obtener usuario completo desde el token JWT"""
+    token_data = verify_token_string(credentials.credentials)
+    
+    # Importar aquí para evitar dependencias circulares
+    from user_service import user_service
+    
+    user = await user_service.get_user_by_id(token_data.user_id)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Usuario no encontrado",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
 async def get_google_user_info(access_token: str) -> dict:
     """Obtener información del usuario desde Google usando el access token"""
     try:

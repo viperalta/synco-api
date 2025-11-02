@@ -14,15 +14,18 @@ from urllib.parse import urlencode
 from dotenv import load_dotenv
 from google_calendar_service import GoogleCalendarService
 from mongodb_config import mongodb_config
-from models import ItemModel, ItemCreate, ItemUpdate, AttendanceRequest, AttendanceResponse, EventAttendanceModel, UserModel, TokenResponse, GoogleUserInfo, TokenRefreshRequest, TokenRefreshResponse, TokenRevokeRequest, UserUpdateRequest, UserListResponse, UserRoleUpdateRequest, UserNicknameUpdateRequest, EventCreateRequest, EventUpdateRequest, EventDeleteResponse
+from models import ItemModel, ItemCreate, ItemUpdate, AttendanceRequest, AttendanceResponse, EventAttendanceModel, UserModel, TokenResponse, GoogleUserInfo, TokenRefreshRequest, TokenRefreshResponse, TokenRevokeRequest, UserUpdateRequest, UserListResponse, UserRoleUpdateRequest, UserNicknameUpdateRequest, EventCreateRequest, EventUpdateRequest, EventDeleteResponse, PaymentCreateRequest, PaymentUpdateRequest, PaymentResponse, PaymentListResponse, PaymentVerificationRequest, S3UploadResponse, S3DownloadResponse, ConfirmUploadRequest, BulkDeletePaymentsRequest, BulkVerifyPaymentsRequest, DebtCreateRequest, DebtUpdateRequest, DebtResponse, DebtListResponse, PlayerDebtResponse
 from database_services import item_service, calendar_event_service, calendar_service, event_attendance_service
+from payment_service import PaymentService
+from debt_service import get_debt_service
+from s3_service import s3_service
 from event_formatter import format_event_description_with_attendance, extract_original_description, is_all_day_event
-from auth import create_access_token, create_refresh_token, verify_token, verify_token_string, verify_refresh_token, get_google_user_info, TokenData, ACCESS_TOKEN_EXPIRE_MINUTES
+from auth import create_access_token, create_refresh_token, verify_token, verify_token_string, verify_refresh_token, get_google_user_info, TokenData, ACCESS_TOKEN_EXPIRE_MINUTES, get_current_user
 from user_service import user_service
 from refresh_token_service import refresh_token_service
 from session_service import session_service
 from pkce_utils import generate_pkce_pair, generate_state, generate_nonce
-from permissions import permission_checker
+from permissions import require_admin_role, permission_checker
 
 # Cargar variables de entorno
 load_dotenv()
@@ -161,6 +164,20 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Inicializar servicios
+# MongoDB se conectará automáticamente cuando se necesite
+payment_service = None  # Se inicializará cuando se conecte MongoDB
+
+async def get_payment_service():
+    """Obtener el servicio de pagos, conectando MongoDB si es necesario"""
+    global payment_service
+    if payment_service is None:
+        # Conectar MongoDB si no está conectado
+        if mongodb_config.database is None:
+            await mongodb_config.connect()
+        payment_service = PaymentService(mongodb_config.get_database())
+    return payment_service
 
 # Modelos Pydantic
 class Item(BaseModel):
@@ -2303,6 +2320,591 @@ async def get_eventos_con_asistencia_detallada(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error al obtener eventos con asistencia detallada: {str(e)}"
         )
+
+# ==================== ENDPOINTS DE PAGOS ====================
+
+@app.post("/payments", response_model=PaymentResponse)
+async def create_payment(
+    payment_data: PaymentCreateRequest,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Crear un nuevo pago
+    """
+    try:
+        service = await get_payment_service()
+        payment = await service.create_payment(current_user.id, payment_data)
+        return payment
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creando pago: {str(e)}")
+
+@app.get("/payments/{payment_id}", response_model=PaymentResponse)
+async def get_payment(
+    payment_id: str,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Obtener un pago específico por ID
+    """
+    try:
+        service = await get_payment_service()
+        payment = await service.get_payment_by_id(payment_id, current_user.id)
+        if not payment:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        return payment
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo pago: {str(e)}")
+
+@app.get("/payments", response_model=PaymentListResponse)
+async def get_user_payments(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    period: Optional[str] = Query(None, description="Filtrar por período (YYYYMM)"),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Obtener todos los pagos del usuario autenticado, opcionalmente filtrados por período
+    """
+    try:
+        service = await get_payment_service()
+        
+        # Si se proporciona un período, filtrar por período
+        if period:
+            payments = await service.get_user_payments_by_period(current_user.id, period, skip, limit)
+            return payments
+        else:
+            # Sin filtro de período, obtener todos los pagos del usuario
+            payments = await service.get_user_payments(current_user.id, skip, limit)
+            return payments
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo pagos: {str(e)}")
+
+@app.get("/payments/period/{period}", response_model=PaymentListResponse)
+async def get_payments_by_period(
+    period: str,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Obtener todos los pagos de un período específico
+    """
+    try:
+        service = await get_payment_service()
+        payments = await service.get_payments_by_period(period, skip, limit)
+        return payments
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo pagos por período: {str(e)}")
+
+@app.get("/admin/payments", response_model=PaymentListResponse)
+async def get_all_payments(
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    status: Optional[str] = Query(None),
+    period: Optional[str] = Query(None),
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Obtener todos los pagos (solo administradores)
+    """
+    try:
+        service = await get_payment_service()
+        payments = await service.get_all_payments(skip, limit, status, period)
+        return payments
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo todos los pagos: {str(e)}")
+
+@app.put("/payments/{payment_id}", response_model=PaymentResponse)
+async def update_payment(
+    payment_id: str,
+    update_data: PaymentUpdateRequest,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Actualizar un pago existente
+    """
+    try:
+        payment = await payment_service.update_payment(payment_id, current_user.id, update_data)
+        if not payment:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        return payment
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error actualizando pago: {str(e)}")
+
+@app.put("/admin/payments/{payment_id}/verify", response_model=PaymentResponse)
+async def verify_payment(
+    payment_id: str,
+    verification_data: PaymentVerificationRequest,
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Verificar un pago (solo administradores)
+    """
+    try:
+        service = await get_payment_service()
+        payment = await service.verify_payment(
+            payment_id, 
+            current_user.id, 
+            verification_data.status, 
+            verification_data.notes
+        )
+        if not payment:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        return payment
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error verificando pago: {str(e)}")
+
+@app.post("/admin/payments/bulk-verify")
+async def bulk_verify_payments(
+    request_data: BulkVerifyPaymentsRequest,
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Verificar múltiples pagos como administrador
+    """
+    try:
+        from bson import ObjectId
+        from datetime import datetime
+        service = await get_payment_service()
+        
+        # Validar status
+        if request_data.status not in ["verified", "rejected"]:
+            raise HTTPException(status_code=400, detail="Status inválido. Debe ser 'verified' o 'rejected'")
+        
+        verified_count = 0
+        not_found_count = 0
+        errors = []
+        
+        for payment_id in request_data.payment_ids:
+            try:
+                # Obtener el pago
+                payment = await service.collection.find_one({"_id": ObjectId(payment_id)})
+                if not payment:
+                    not_found_count += 1
+                    continue
+                
+                # Preparar datos de actualización
+                update_data = {
+                    "status": request_data.status,
+                    "verified_by": ObjectId(current_user.id),
+                    "verified_at": datetime.utcnow(),
+                    "updated_at": datetime.utcnow()
+                }
+                
+                if request_data.notes:
+                    update_data["notes"] = request_data.notes
+                
+                # Actualizar el pago
+                result = await service.collection.update_one(
+                    {"_id": ObjectId(payment_id)},
+                    {"$set": update_data}
+                )
+                
+                if result.modified_count > 0:
+                    verified_count += 1
+                else:
+                    not_found_count += 1
+            except Exception as e:
+                errors.append(f"Error verificando pago {payment_id}: {str(e)}")
+                not_found_count += 1
+        
+        return {
+            "message": "Verificación masiva completada",
+            "total_requested": len(request_data.payment_ids),
+            "verified": verified_count,
+            "not_found": not_found_count,
+            "errors": errors if errors else None
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en verificación masiva: {str(e)}")
+
+@app.delete("/payments/{payment_id}")
+async def delete_payment(
+    payment_id: str,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Eliminar un pago (solo el propio usuario)
+    """
+    try:
+        service = await get_payment_service()
+        success = await service.delete_payment(payment_id, current_user.id)
+        if not success:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        return {"message": "Pago eliminado correctamente"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error eliminando pago: {str(e)}")
+
+@app.post("/admin/payments/bulk-delete")
+async def bulk_delete_payments(
+    request_data: BulkDeletePaymentsRequest,
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Eliminar múltiples pagos como administrador
+    """
+    try:
+        from bson import ObjectId
+        service = await get_payment_service()
+        
+        deleted_count = 0
+        not_found_count = 0
+        errors = []
+        
+        for payment_id in request_data.payment_ids:
+            try:
+                # Obtener el pago
+                payment = await service.collection.find_one({"_id": ObjectId(payment_id)})
+                if not payment:
+                    not_found_count += 1
+                    continue
+                
+                # Eliminar archivo de S3 si existe
+                if payment.get("receipt_image_key"):
+                    try:
+                        s3_service.delete_file(payment["receipt_image_key"])
+                    except Exception as e:
+                        errors.append(f"Error eliminando archivo de S3 para pago {payment_id}: {str(e)}")
+                
+                # Eliminar el pago de la base de datos
+                result = await service.collection.delete_one({"_id": ObjectId(payment_id)})
+                if result.deleted_count > 0:
+                    deleted_count += 1
+                else:
+                    not_found_count += 1
+            except Exception as e:
+                errors.append(f"Error eliminando pago {payment_id}: {str(e)}")
+                not_found_count += 1
+        
+        return {
+            "message": "Eliminación masiva completada",
+            "total_requested": len(request_data.payment_ids),
+            "deleted": deleted_count,
+            "not_found": not_found_count,
+            "errors": errors if errors else None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error en eliminación masiva: {str(e)}")
+
+@app.delete("/admin/payments/{payment_id}")
+async def delete_payment_admin(
+    payment_id: str,
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Eliminar un pago como administrador (permite eliminar cualquier pago)
+    """
+    try:
+        from bson import ObjectId
+        service = await get_payment_service()
+        
+        # Verificar que no sea el endpoint bulk-delete
+        if payment_id == "bulk-delete":
+            raise HTTPException(status_code=400, detail="Use DELETE /admin/payments/bulk-delete with request body")
+        
+        # Obtener el pago
+        payment = await service.collection.find_one({"_id": ObjectId(payment_id)})
+        if not payment:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        
+        # Eliminar archivo de S3 si existe
+        if payment.get("receipt_image_key"):
+            s3_service.delete_file(payment["receipt_image_key"])
+        
+        # Eliminar el pago de la base de datos (sin restricción de user_id)
+        result = await service.collection.delete_one({"_id": ObjectId(payment_id)})
+        if result.deleted_count > 0:
+            return {"message": "Pago eliminado correctamente"}
+        else:
+            raise HTTPException(status_code=500, detail="Error eliminando pago")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error eliminando pago: {str(e)}")
+
+@app.post("/payments/{payment_id}/upload-url", response_model=S3UploadResponse)
+async def get_upload_url(
+    payment_id: str,
+    file_extension: str = Query(..., description="Extensión del archivo (ej: jpg, png, pdf)"),
+    expires_in: int = Query(3600, ge=300, le=7200, description="Tiempo de expiración en segundos"),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Generar URL prefirmada para subir comprobante de pago
+    """
+    try:
+        # Verificar que el pago existe y pertenece al usuario
+        payment = await payment_service.get_payment_by_id(payment_id, current_user.id)
+        if not payment:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        
+        # Generar URL de subida
+        upload_info = s3_service.generate_upload_url(
+            file_extension, 
+            current_user.id, 
+            payment_id, 
+            expires_in
+        )
+        
+        return S3UploadResponse(**upload_info)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando URL de subida: {str(e)}")
+
+@app.post("/payments/{payment_id}/confirm-upload")
+async def confirm_upload(
+    payment_id: str,
+    request_data: ConfirmUploadRequest,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Confirmar que se subió el comprobante y actualizar el pago
+    """
+    try:
+        # Verificar que el pago existe y pertenece al usuario
+        service = await get_payment_service()
+        payment = await service.get_payment_by_id(payment_id, current_user.id)
+        if not payment:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        
+        # Actualizar el pago con la información del archivo
+        updated_payment = await service.update_payment_receipt(payment_id, current_user.id, request_data.file_key)
+        if not updated_payment:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        
+        return {"message": "Comprobante subido correctamente", "payment": updated_payment}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error confirmando subida: {str(e)}")
+
+@app.get("/payments/{payment_id}/download-url", response_model=S3DownloadResponse)
+async def get_download_url(
+    payment_id: str,
+    expires_in: int = Query(3600, ge=300, le=7200, description="Tiempo de expiración en segundos"),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Generar URL prefirmada para descargar comprobante de pago
+    """
+    try:
+        # Verificar que el pago existe y pertenece al usuario
+        service = await get_payment_service()
+        payment = await service.get_payment_by_id(payment_id, current_user.id)
+        if not payment:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        
+        if not payment.receipt_image_url:
+            raise HTTPException(status_code=404, detail="No hay comprobante disponible")
+        
+        # Obtener el documento completo de MongoDB para acceder a receipt_image_key
+        from bson import ObjectId
+        payment_doc = await service.collection.find_one({"_id": ObjectId(payment_id), "user_id": ObjectId(current_user.id)})
+        if not payment_doc or not payment_doc.get("receipt_image_key"):
+            raise HTTPException(status_code=404, detail="No hay comprobante disponible")
+        
+        # Generar nueva URL de descarga
+        download_info = s3_service.generate_download_url(payment_doc["receipt_image_key"], expires_in)
+        
+        return S3DownloadResponse(**download_info)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando URL de descarga: {str(e)}")
+
+@app.get("/admin/payments/{payment_id}/download-url", response_model=S3DownloadResponse)
+async def get_download_url_admin(
+    payment_id: str,
+    expires_in: int = Query(3600, ge=300, le=7200, description="Tiempo de expiración en segundos"),
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Generar URL prefirmada para descargar comprobante de pago (solo administradores)
+    """
+    try:
+        # Obtener el documento completo de MongoDB
+        service = await get_payment_service()
+        from bson import ObjectId
+        
+        # No filtrar por user_id, permitir descargar cualquier pago
+        payment_doc = await service.collection.find_one({"_id": ObjectId(payment_id)})
+        if not payment_doc:
+            raise HTTPException(status_code=404, detail="Pago no encontrado")
+        
+        if not payment_doc.get("receipt_image_key"):
+            raise HTTPException(status_code=404, detail="No hay comprobante disponible")
+        
+        # Generar nueva URL de descarga
+        download_info = s3_service.generate_download_url(payment_doc["receipt_image_key"], expires_in)
+        
+        return S3DownloadResponse(**download_info)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando URL de descarga: {str(e)}")
+
+@app.get("/admin/payments/statistics")
+async def get_payment_statistics(
+    user_id: Optional[str] = Query(None),
+    period: Optional[str] = Query(None),
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Obtener estadísticas de pagos (solo administradores)
+    """
+    try:
+        service = await get_payment_service()
+        stats = await service.get_payment_statistics(user_id, period)
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo estadísticas: {str(e)}")
+
+# ==================== ENDPOINTS DE DEUDAS ====================
+
+@app.post("/admin/debts", response_model=DebtResponse)
+async def create_debt(
+    debt_data: DebtCreateRequest,
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Crear un registro de deuda para un período (solo administradores)
+    """
+    try:
+        service = await get_debt_service()
+        debt = await service.create_debt(debt_data)
+        return debt
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creando deuda: {str(e)}")
+
+@app.get("/admin/debts", response_model=DebtListResponse)
+async def get_all_debts(
+    skip: int = Query(0, ge=0, description="Número de registros a saltar"),
+    limit: int = Query(100, ge=1, le=1000, description="Número máximo de registros a devolver"),
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Obtener todas las deudas (solo administradores)
+    """
+    try:
+        service = await get_debt_service()
+        debts = await service.get_all_debts(skip, limit)
+        return debts
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo deudas: {str(e)}")
+
+@app.get("/admin/debts/{period}", response_model=DebtResponse)
+async def get_debt_by_period(
+    period: str,
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Obtener deuda por período (solo administradores)
+    """
+    try:
+        service = await get_debt_service()
+        debt = await service.get_debt_by_period(period)
+        if not debt:
+            raise HTTPException(status_code=404, detail="Deuda no encontrada para este período")
+        return debt
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo deuda: {str(e)}")
+
+@app.put("/admin/debts/{period}", response_model=DebtResponse)
+async def update_debt(
+    period: str,
+    update_data: DebtUpdateRequest,
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Actualizar deuda para un período (solo administradores)
+    """
+    try:
+        service = await get_debt_service()
+        debt = await service.update_debt(period, update_data)
+        if not debt:
+            raise HTTPException(status_code=404, detail="Deuda no encontrada para este período")
+        return debt
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error actualizando deuda: {str(e)}")
+
+@app.delete("/admin/debts/{period}")
+async def delete_debt(
+    period: str,
+    current_user: UserModel = Depends(require_admin_role)
+):
+    """
+    Eliminar deuda para un período (solo administradores)
+    """
+    try:
+        service = await get_debt_service()
+        deleted = await service.delete_debt(period)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Deuda no encontrada para este período")
+        return {"message": "Deuda eliminada correctamente"}
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error eliminando deuda: {str(e)}")
+
+@app.get("/player/debt/{period}", response_model=PlayerDebtResponse)
+async def get_player_debt(
+    period: str,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """
+    Obtener deuda del jugador para un período específico
+    """
+    try:
+        service = await get_debt_service()
+        debt = await service.get_player_debt(str(current_user.id), period)
+        if not debt:
+            raise HTTPException(status_code=404, detail="No tienes deuda registrada para este período")
+        return debt
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error obteniendo tu deuda: {str(e)}")
 
 # Función para ejecutar localmente
 if __name__ == "__main__":
