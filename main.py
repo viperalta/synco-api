@@ -755,14 +755,16 @@ async def get_calendarios():
 async def get_eventos(
     calendar_id: str = Query(default="primary", description="ID del calendario"),
     max_results: int = Query(default=50, ge=1, le=100, description="Número máximo de eventos"),
-    days_ahead: int = Query(default=90, ge=1, le=365, description="Días hacia adelante para buscar eventos")
+    days_ahead: int = Query(default=90, ge=1, le=365, description="Días hacia adelante para buscar eventos"),
+    period: Optional[str] = Query(default=None, description="Período en formato YYYYMM (ejemplo: 202401 para enero 2024). Si se proporciona, ignora days_ahead")
 ):
     """
     Obtener eventos de un calendario específico
     
     - **calendar_id**: ID del calendario (por defecto 'primary')
     - **max_results**: Número máximo de eventos a retornar (1-100, por defecto 50)
-    - **days_ahead**: Días hacia adelante para buscar eventos (1-365, por defecto 90 días = 3 meses)
+    - **days_ahead**: Días hacia adelante para buscar eventos (1-365, por defecto 90 días = 3 meses). Se ignora si se proporciona period
+    - **period**: Período en formato YYYYMM (opcional). Si se proporciona, filtra eventos del mes/año especificado
     """
     if not google_calendar_service:
         raise HTTPException(
@@ -772,8 +774,33 @@ async def get_eventos(
     
     try:
         # Calcular fechas de búsqueda
-        time_min = datetime.utcnow()
-        time_max = time_min + timedelta(days=days_ahead)
+        if period:
+            # Validar formato YYYYMM
+            if len(period) != 6 or not period.isdigit():
+                raise HTTPException(
+                    status_code=400,
+                    detail="El formato de período debe ser YYYYMM (ejemplo: 202401 para enero 2024)"
+                )
+            
+            year = int(period[:4])
+            month = int(period[4:6])
+            
+            if month < 1 or month > 12:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El mes debe estar entre 01 y 12"
+                )
+            
+            # Calcular rango de fechas del mes
+            time_min = datetime(year, month, 1)
+            if month == 12:
+                time_max = datetime(year + 1, 1, 1)
+            else:
+                time_max = datetime(year, month + 1, 1)
+        else:
+            # Comportamiento original: desde ahora hasta days_ahead días adelante
+            time_min = datetime.utcnow()
+            time_max = time_min + timedelta(days=days_ahead)
         
         eventos = google_calendar_service.get_events(
             calendar_id=calendar_id,
@@ -784,6 +811,8 @@ async def get_eventos(
         
         return eventos
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener eventos: {str(e)}")
 
@@ -791,14 +820,16 @@ async def get_eventos(
 async def get_eventos_por_calendario(
     calendar_id: str,
     max_results: int = Query(default=50, ge=1, le=100, description="Número máximo de eventos"),
-    days_ahead: int = Query(default=90, ge=1, le=365, description="Días hacia adelante para buscar eventos")
+    days_ahead: int = Query(default=90, ge=1, le=365, description="Días hacia adelante para buscar eventos"),
+    period: Optional[str] = Query(default=None, description="Período en formato YYYYMM (ejemplo: 202401 para enero 2024). Si se proporciona, ignora days_ahead")
 ):
     """
     Obtener eventos de un calendario específico por ID
     
     - **calendar_id**: ID del calendario en la URL
     - **max_results**: Número máximo de eventos a retornar (1-100)
-    - **days_ahead**: Días hacia adelante para buscar eventos (1-365)
+    - **days_ahead**: Días hacia adelante para buscar eventos (1-365). Se ignora si se proporciona period
+    - **period**: Período en formato YYYYMM (opcional). Si se proporciona, filtra eventos del mes/año especificado
     """
     if not google_calendar_service:
         raise HTTPException(
@@ -808,8 +839,33 @@ async def get_eventos_por_calendario(
     
     try:
         # Calcular fechas de búsqueda
-        time_min = datetime.utcnow()
-        time_max = time_min + timedelta(days=days_ahead)
+        if period:
+            # Validar formato YYYYMM
+            if len(period) != 6 or not period.isdigit():
+                raise HTTPException(
+                    status_code=400,
+                    detail="El formato de período debe ser YYYYMM (ejemplo: 202401 para enero 2024)"
+                )
+            
+            year = int(period[:4])
+            month = int(period[4:6])
+            
+            if month < 1 or month > 12:
+                raise HTTPException(
+                    status_code=400,
+                    detail="El mes debe estar entre 01 y 12"
+                )
+            
+            # Calcular rango de fechas del mes
+            time_min = datetime(year, month, 1)
+            if month == 12:
+                time_max = datetime(year + 1, 1, 1)
+            else:
+                time_max = datetime(year, month + 1, 1)
+        else:
+            # Comportamiento original: desde ahora hasta days_ahead días adelante
+            time_min = datetime.utcnow()
+            time_max = time_min + timedelta(days=days_ahead)
         
         eventos = google_calendar_service.get_events(
             calendar_id=calendar_id,
@@ -820,6 +876,8 @@ async def get_eventos_por_calendario(
         
         return eventos
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error al obtener eventos: {str(e)}")
 
