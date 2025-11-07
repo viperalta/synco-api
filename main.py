@@ -821,15 +821,19 @@ async def get_eventos_por_calendario(
     calendar_id: str,
     max_results: int = Query(default=50, ge=1, le=100, description="Número máximo de eventos"),
     days_ahead: int = Query(default=90, ge=1, le=365, description="Días hacia adelante para buscar eventos"),
-    period: Optional[str] = Query(default=None, description="Período en formato YYYYMM (ejemplo: 202401 para enero 2024). Si se proporciona, ignora days_ahead")
+    period: Optional[str] = Query(default=None, description="Período en formato YYYYMM (ejemplo: 202401 para enero 2024). Se ignora si se proporciona start_date o end_date"),
+    start_date: Optional[str] = Query(default=None, description="Fecha de inicio en formato ISO (YYYY-MM-DD o YYYY-MM-DDTHH:MM:SS). Si se proporciona, se ignora period y days_ahead"),
+    end_date: Optional[str] = Query(default=None, description="Fecha de fin en formato ISO (YYYY-MM-DD o YYYY-MM-DDTHH:MM:SS). Si se proporciona, se ignora period y days_ahead")
 ):
     """
     Obtener eventos de un calendario específico por ID
     
     - **calendar_id**: ID del calendario en la URL
     - **max_results**: Número máximo de eventos a retornar (1-100)
-    - **days_ahead**: Días hacia adelante para buscar eventos (1-365). Se ignora si se proporciona period
-    - **period**: Período en formato YYYYMM (opcional). Si se proporciona, filtra eventos del mes/año especificado
+    - **days_ahead**: Días hacia adelante para buscar eventos (1-365). Se ignora si se proporciona period, start_date o end_date
+    - **period**: Período en formato YYYYMM (opcional). Se ignora si se proporciona start_date o end_date
+    - **start_date**: Fecha de inicio en formato ISO (YYYY-MM-DD o YYYY-MM-DDTHH:MM:SS). Opcional
+    - **end_date**: Fecha de fin en formato ISO (YYYY-MM-DD o YYYY-MM-DDTHH:MM:SS). Opcional
     """
     if not google_calendar_service:
         raise HTTPException(
@@ -839,7 +843,74 @@ async def get_eventos_por_calendario(
     
     try:
         # Calcular fechas de búsqueda
-        if period:
+        if start_date or end_date:
+            # Usar fechas personalizadas
+            if start_date:
+                try:
+                    # Intentar parsear diferentes formatos
+                    if 'T' in start_date:
+                        # Formato ISO con T: YYYY-MM-DDTHH:MM:SS
+                        date_str = start_date.split('+')[0].split('Z')[0]
+                        if len(date_str) == 19:  # YYYY-MM-DDTHH:MM:SS
+                            time_min = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S")
+                        elif len(date_str) == 16:  # YYYY-MM-DDTHH:MM
+                            time_min = datetime.strptime(date_str, "%Y-%m-%dT%H:%M")
+                        else:
+                            time_min = datetime.strptime(date_str.split('T')[0], "%Y-%m-%d")
+                    elif ' ' in start_date:
+                        # Formato con espacio: YYYY-MM-DD HH:MM:SS
+                        date_str = start_date.split('+')[0].split('Z')[0]
+                        time_min = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                    else:
+                        # Solo fecha: YYYY-MM-DD
+                        time_min = datetime.strptime(start_date, "%Y-%m-%d")
+                except ValueError as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Formato de start_date inválido. Use YYYY-MM-DD o YYYY-MM-DDTHH:MM:SS. Error: {str(e)}"
+                    )
+            else:
+                # Si no hay start_date, usar fecha actual
+                time_min = datetime.utcnow()
+            
+            if end_date:
+                try:
+                    # Intentar parsear diferentes formatos
+                    if 'T' in end_date:
+                        # Formato ISO con T: YYYY-MM-DDTHH:MM:SS
+                        date_str = end_date.split('+')[0].split('Z')[0]
+                        if len(date_str) == 19:  # YYYY-MM-DDTHH:MM:SS
+                            time_max = datetime.strptime(date_str, "%Y-%m-%dT%H:%M:%S")
+                        elif len(date_str) == 16:  # YYYY-MM-DDTHH:MM
+                            time_max = datetime.strptime(date_str, "%Y-%m-%dT%H:%M")
+                        else:
+                            # Solo fecha, agregar hora 23:59:59 para incluir todo el día
+                            time_max = datetime.strptime(date_str.split('T')[0], "%Y-%m-%d")
+                            time_max = time_max.replace(hour=23, minute=59, second=59)
+                    elif ' ' in end_date:
+                        # Formato con espacio: YYYY-MM-DD HH:MM:SS
+                        date_str = end_date.split('+')[0].split('Z')[0]
+                        time_max = datetime.strptime(date_str, "%Y-%m-%d %H:%M:%S")
+                    else:
+                        # Solo fecha: YYYY-MM-DD, agregar hora 23:59:59 para incluir todo el día
+                        time_max = datetime.strptime(end_date, "%Y-%m-%d")
+                        time_max = time_max.replace(hour=23, minute=59, second=59)
+                except ValueError as e:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Formato de end_date inválido. Use YYYY-MM-DD o YYYY-MM-DDTHH:MM:SS. Error: {str(e)}"
+                    )
+            else:
+                # Si no hay end_date pero sí start_date, usar 30 días después
+                time_max = time_min + timedelta(days=30)
+            
+            # Validar que start_date sea anterior a end_date
+            if time_min >= time_max:
+                raise HTTPException(
+                    status_code=400,
+                    detail="start_date debe ser anterior a end_date"
+                )
+        elif period:
             # Validar formato YYYYMM
             if len(period) != 6 or not period.isdigit():
                 raise HTTPException(
