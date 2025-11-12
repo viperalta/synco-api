@@ -252,6 +252,7 @@ class PaymentCreateRequest(BaseModel):
     period: str  # Formato YYYYMM
     payment_date: Optional[datetime] = None
     notes: Optional[str] = None
+    user_id: Optional[str] = None  # ID del usuario (solo para admins, si no se proporciona usa el usuario autenticado)
 
 class PaymentUpdateRequest(BaseModel):
     amount: Optional[float] = None

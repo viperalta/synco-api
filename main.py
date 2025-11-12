@@ -2488,13 +2488,45 @@ async def create_payment(
 ):
     """
     Crear un nuevo pago
+    
+    Si el usuario es admin y proporciona user_id en payment_data, 
+    se crea el pago a nombre de ese usuario.
+    Si no es admin o no proporciona user_id, se crea a nombre del usuario autenticado.
     """
     client = None
     try:
         client, database = await get_mongodb_connection()
         service = await get_payment_service(database)
-        payment = await service.create_payment(current_user.id, payment_data)
+        
+        # Determinar el user_id a usar
+        target_user_id = current_user.id
+        
+        # Si se proporciona user_id en el request, verificar que el usuario sea admin
+        if payment_data.user_id:
+            # Verificar que el usuario sea admin
+            from permissions import permission_checker
+            is_admin = await permission_checker.check_permission(current_user.id, "users.manage_roles")
+            if not is_admin:
+                raise HTTPException(
+                    status_code=403, 
+                    detail="Solo los administradores pueden crear pagos a nombre de otros usuarios"
+                )
+            # Usar el user_id proporcionado (del usuario objetivo)
+            target_user_id = payment_data.user_id
+        
+        # Crear el pago con el user_id determinado
+        # Nota: No pasar payment_data.user_id al servicio, ya que puede contener el user_id del admin
+        # En su lugar, crear una copia sin el campo user_id para evitar confusión
+        payment_data_for_service = PaymentCreateRequest(
+            amount=payment_data.amount,
+            period=payment_data.period,
+            payment_date=payment_data.payment_date,
+            notes=payment_data.notes
+        )
+        payment = await service.create_payment(target_user_id, payment_data_for_service)
         return payment
+    except HTTPException:
+        raise
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -2865,20 +2897,35 @@ async def get_upload_url(
 ):
     """
     Generar URL prefirmada para subir comprobante de pago
+    
+    Los administradores pueden generar URLs de subida para pagos de cualquier usuario.
     """
     client = None
     try:
         client, database = await get_mongodb_connection()
         service = await get_payment_service(database)
-        # Verificar que el pago existe y pertenece al usuario
-        payment = await service.get_payment_by_id(payment_id, current_user.id)
+        
+        # Verificar si el usuario es admin
+        from permissions import permission_checker
+        is_admin = await permission_checker.check_permission(current_user.id, "users.manage_roles")
+        
+        # Verificar que el pago existe
+        # Si es admin, no verificar que pertenezca al usuario
+        if is_admin:
+            payment = await service.get_payment_by_id(payment_id, None)
+        else:
+            payment = await service.get_payment_by_id(payment_id, current_user.id)
+        
         if not payment:
             raise HTTPException(status_code=404, detail="Pago no encontrado")
+        
+        # Usar el user_id del pago para generar la URL (no el del usuario autenticado)
+        payment_user_id = payment.user_id
         
         # Generar URL de subida
         upload_info = s3_service.generate_upload_url(
             file_extension, 
-            current_user.id, 
+            payment_user_id, 
             payment_id, 
             expires_in
         )
@@ -2900,18 +2947,33 @@ async def confirm_upload(
 ):
     """
     Confirmar que se subió el comprobante y actualizar el pago
+    
+    Los administradores pueden confirmar subidas de comprobantes para pagos de cualquier usuario.
     """
     client = None
     try:
         client, database = await get_mongodb_connection()
         service = await get_payment_service(database)
-        # Verificar que el pago existe y pertenece al usuario
-        payment = await service.get_payment_by_id(payment_id, current_user.id)
+        
+        # Verificar si el usuario es admin
+        from permissions import permission_checker
+        is_admin = await permission_checker.check_permission(current_user.id, "users.manage_roles")
+        
+        # Verificar que el pago existe
+        # Si es admin, no verificar que pertenezca al usuario
+        if is_admin:
+            payment = await service.get_payment_by_id(payment_id, None)
+        else:
+            payment = await service.get_payment_by_id(payment_id, current_user.id)
+        
         if not payment:
             raise HTTPException(status_code=404, detail="Pago no encontrado")
         
+        # Usar el user_id del pago para actualizar (no el del usuario autenticado)
+        payment_user_id = payment.user_id
+        
         # Actualizar el pago con la información del archivo
-        updated_payment = await service.update_payment_receipt(payment_id, current_user.id, request_data.file_key)
+        updated_payment = await service.update_payment_receipt(payment_id, payment_user_id, request_data.file_key)
         if not updated_payment:
             raise HTTPException(status_code=404, detail="Pago no encontrado")
         
